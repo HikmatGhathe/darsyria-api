@@ -33,7 +33,15 @@ def create_oauth_state(db: Session, locale: str = "en") -> str:
 
 
 def consume_oauth_state(db: Session, state: str) -> Optional[str]:
-    """Consume a valid Google OAuth state and return its locale."""
+    """
+    Consume a valid Google OAuth state and return its locale.
+    Also opportunistically removes expired states.
+    """
+    now = datetime.now(timezone.utc)
+    db.query(OAuthState).filter(OAuthState.expires_at < now).delete(
+        synchronize_session=False
+    )
+
     db_state = (
         db.query(OAuthState)
         .filter(OAuthState.state == state, OAuthState.provider == "google")
@@ -41,9 +49,10 @@ def consume_oauth_state(db: Session, state: str) -> Optional[str]:
         .first()
     )
     if not db_state:
+        db.commit()
         return None
 
-    if db_state.expires_at < datetime.now(timezone.utc):
+    if db_state.expires_at < now:
         db.delete(db_state)
         db.commit()
         return None

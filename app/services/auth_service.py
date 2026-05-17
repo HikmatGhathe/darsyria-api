@@ -56,7 +56,16 @@ def verify_magic_link_token(db: Session, raw_token: str) -> Optional[User]:
     """
     Verify a raw token. If valid, mark it used, find or create the user,
     and return the user. Returns None on any failure.
+    Also opportunistically deletes long-expired tokens.
     """
+    now = datetime.now(timezone.utc)
+
+    # Keep recent tokens for short-term audit value, then discard old noise.
+    cutoff = now - timedelta(days=7)
+    db.query(MagicLinkToken).filter(MagicLinkToken.created_at < cutoff).delete(
+        synchronize_session=False
+    )
+
     token_hash = hash_token(raw_token)
     db_token = (
         db.query(MagicLinkToken)
@@ -65,14 +74,16 @@ def verify_magic_link_token(db: Session, raw_token: str) -> Optional[User]:
         .first()
     )
     if not db_token:
+        db.commit()
         return None
     if db_token.used_at is not None:
+        db.commit()
         return None
-    if db_token.expires_at < datetime.now(timezone.utc):
+    if db_token.expires_at < now:
+        db.commit()
         return None
 
     # Mark the token used while the row is locked to keep verification single-use.
-    now = datetime.now(timezone.utc)
     db_token.used_at = now
 
     user = db.query(User).filter(User.email == db_token.email).first()
