@@ -25,5 +25,10 @@ class Settings(BaseSettings):
     ollama_api_key: str = ""
     ollama_model: str = "gemma2:27b"
 
+    # Google OAuth
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    google_redirect_uri: str = "http://localhost:8000/auth/google/callback"
+
 
 settings = Settings()

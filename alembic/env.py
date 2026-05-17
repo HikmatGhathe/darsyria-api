@@ -10,7 +10,7 @@ from app.database import Base
 
 # Import all models here so Alembic can detect them.
 # Each model file we create needs to be imported here.
-from app.models import magic_link_token, user  # noqa: F401
+from app.models import magic_link_token, oauth_state, user  # noqa: F401
 
 # Alembic config object
 config = context.config

@@ -1,6 +1,7 @@
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -18,6 +19,13 @@ from app.services.auth_service import (
     create_access_token,
     create_magic_link_token,
     verify_magic_link_token,
+)
+from app.services.google_oauth_service import (
+    build_authorization_url,
+    consume_oauth_state,
+    create_oauth_state,
+    exchange_code_for_userinfo,
+    find_or_create_google_user,
 )
 
 logger = logging.getLogger(__name__)
@@ -98,3 +106,61 @@ def logout(current_user: User = Depends(get_current_user)):
     session revocation if we ever add it.
     """
     return GenericMessage(message="Logged out")
+
+
+@router.get("/google/login")
+def google_login(locale: str = "en", db: Session = Depends(get_db)):
+    """
+    Start the Google OAuth flow.
+    Returns the URL the frontend should redirect the user to.
+    """
+    if locale not in ("ar", "de", "en"):
+        locale = "en"
+
+    state = create_oauth_state(db, locale=locale)
+    url = build_authorization_url(state)
+    return {"authorization_url": url}
+
+
+@router.get("/google/callback")
+def google_callback(
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+    db: Session = Depends(get_db),
+):
+    """
+    Finish Google OAuth, issue our JWT, and redirect back to the frontend.
+    """
+    if error or not code or not state:
+        return RedirectResponse(
+            url=f"{settings.frontend_url}/en/auth/verify?error=oauth_failed",
+            status_code=302,
+        )
+
+    locale = consume_oauth_state(db, state)
+    if not locale:
+        return RedirectResponse(
+            url=f"{settings.frontend_url}/en/auth/verify?error=invalid_state",
+            status_code=302,
+        )
+
+    userinfo = exchange_code_for_userinfo(code)
+    if not userinfo or "sub" not in userinfo or "email" not in userinfo:
+        return RedirectResponse(
+            url=f"{settings.frontend_url}/{locale}/auth/verify?error=oauth_failed",
+            status_code=302,
+        )
+
+    user = find_or_create_google_user(db, userinfo)
+    if not user.is_active:
+        return RedirectResponse(
+            url=f"{settings.frontend_url}/{locale}/auth/verify?error=account_disabled",
+            status_code=302,
+        )
+
+    access_token = create_access_token(user)
+    return RedirectResponse(
+        url=f"{settings.frontend_url}/{locale}/auth/verify#access_token={access_token}",
+        status_code=302,
+    )
