@@ -56,6 +56,7 @@ async def generate_chat_response(
     user_message: str,
     history: list[dict],
     locale: str = "en",
+    retrieved_context: str | None = None,
 ) -> dict:
     """
     Send a message to Ollama Cloud and return the response.
@@ -69,7 +70,22 @@ async def generate_chat_response(
     if locale not in SYSTEM_PROMPTS:
         locale = "en"
 
-    messages = [{"role": "system", "content": SYSTEM_PROMPTS[locale]}]
+    system_prompt = SYSTEM_PROMPTS[locale]
+    if retrieved_context:
+        system_prompt = (
+            f"{system_prompt}\n\n"
+            "Retrieved DarSyria knowledge-base excerpts:\n"
+            f"{retrieved_context}\n\n"
+            "Use these excerpts only when they directly answer the user's "
+            "Syrian-real-estate question. When you use any excerpt, end the "
+            "answer with a final line like: Sources: [03-reciprocity], [11-tax]. "
+            "Use only slugs that appear in the retrieved excerpts. If the "
+            "excerpts do not contain the answer, say the current DarSyria "
+            "knowledge base does not cover it. Do not invent sources or legal "
+            "claims."
+        )
+
+    messages = [{"role": "system", "content": system_prompt}]
     messages.extend(history)
     messages.append({"role": "user", "content": user_message})
 

@@ -10,6 +10,7 @@ from app.models.chat_message import ChatMessage
 from app.models.user import User
 from app.schemas.chat import ChatRequest, ChatResponse
 from app.services.ollama_service import generate_chat_response, OllamaError
+from app.services.retrieval import format_retrieval_context, retrieve_article_chunks
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -42,12 +43,29 @@ async def post_chat(
     # Convert history to plain dicts for Ollama
     history = [{"role": m.role, "content": m.content} for m in payload.history]
 
+    # Retrieve relevant DarSyria article excerpts for source-grounded answers.
+    try:
+        retrieved_chunks = retrieve_article_chunks(
+            db,
+            query=payload.message,
+            locale=payload.locale,
+            limit=3,
+        )
+        retrieved_context = format_retrieval_context(retrieved_chunks)
+    except Exception as e:
+        logger.exception("Article retrieval failed")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The knowledge base is temporarily unavailable. Please try again shortly.",
+        ) from e
+
     # Call Ollama
     try:
         result = await generate_chat_response(
             user_message=payload.message,
             history=history,
             locale=payload.locale,
+            retrieved_context=retrieved_context,
         )
     except OllamaError as e:
         logger.error("Ollama failed: %s", e)

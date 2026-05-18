@@ -25,3 +25,6 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Article drafts (not yet finalized for production)
+content/articles/*.md

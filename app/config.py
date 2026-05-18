@@ -25,6 +25,11 @@ class Settings(BaseSettings):
     ollama_api_key: str = ""
     ollama_model: str = "gemma2:27b"
 
+    # RAG / Embeddings
+    article_source_dir: str = "content/articles"
+    embedding_model: str = "intfloat/multilingual-e5-large"
+    embedding_dimensions: int = 1024
+
     # Google OAuth
     google_client_id: str = ""
     google_client_secret: str = ""
