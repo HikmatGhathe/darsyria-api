@@ -10,7 +10,7 @@ from app.database import get_db
 from app.dependencies import get_current_user, get_optional_user
 from app.models.property import Property
 from app.models.user import User
-from app.schemas.property import PropertyCreate, PropertyOut, PropertyListItem
+from app.schemas.property import PropertyCreate, PropertyUpdate, PropertyOut, PropertyListItem
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/properties", tags=["properties"])
@@ -160,3 +160,52 @@ def unpublish_property(
 
     logger.info("Property %s unpublished by %s", prop.id, current_user.id)
     return prop
+
+
+@router.patch("/{property_id}", response_model=PropertyOut)
+def update_property(
+    property_id: UUID,
+    payload: PropertyUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    prop = db.get(Property, property_id)
+    if not prop:
+        raise HTTPException(status_code=404, detail="Property not found")
+
+    if prop.owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="You can only edit your own listings")
+
+    updates = payload.model_dump(exclude_unset=True)
+
+    if not updates:
+        return prop
+
+    for field, value in updates.items():
+        setattr(prop, field, value)
+
+    db.commit()
+    db.refresh(prop)
+
+    logger.info("Property %s updated by %s (fields: %s)", prop.id, current_user.id, list(updates.keys()))
+    return prop
+
+
+@router.delete("/{property_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_property(
+    property_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    prop = db.get(Property, property_id)
+    if not prop:
+        raise HTTPException(status_code=404, detail="Property not found")
+
+    if prop.owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="You can only delete your own listings")
+
+    db.delete(prop)
+    db.commit()
+
+    logger.info("Property %s deleted by %s", property_id, current_user.id)
+    return None

@@ -66,3 +66,25 @@ class PropertyListItem(BaseModel):
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+# Update schema: all fields optional, only what's sent gets changed
+class PropertyUpdate(BaseModel):
+    title: Optional[str] = Field(default=None, min_length=5, max_length=200)
+    description: Optional[str] = Field(default=None, min_length=20, max_length=10000)
+
+    city: Optional[str] = Field(default=None, min_length=2, max_length=100)
+    neighborhood: Optional[str] = Field(default=None, max_length=150)
+
+    price_amount: Optional[Decimal] = Field(default=None, gt=0)
+    price_currency: Optional[str] = Field(default=None, pattern="^(USD|EUR|SYP)$")
+
+    property_type: Optional[str] = Field(default=None, pattern="^(apartment|house|land|commercial)$")
+    rooms: Optional[int] = Field(default=None, ge=0, le=50)
+    bathrooms: Optional[int] = Field(default=None, ge=0, le=20)
+    area_sqm: Optional[int] = Field(default=None, gt=0, le=100000)
+
+    document_status: Optional[str] = Field(
+        default=None,
+        pattern="^(none|claimed|documents_provided)$",
+    )
