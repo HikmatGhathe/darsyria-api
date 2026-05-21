@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.dependencies import get_current_user
+from app.dependencies import get_current_user, get_optional_user
 from app.models.property import Property
 from app.models.user import User
 from app.schemas.property import PropertyCreate, PropertyOut, PropertyListItem
@@ -91,14 +91,72 @@ def list_properties(
 def get_property(
     property_id: UUID,
     db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_optional_user),
 ):
     """
-    Get a single property by ID. Public, but only 'active' (or owned by viewer
-    in a future step where we add ownership-based access to drafts).
+    Get a single property. Active properties are public.
+    Drafts are visible only to their owner.
     """
     prop = db.get(Property, property_id)
     if not prop:
         raise HTTPException(status_code=404, detail="Property not found")
+
     if prop.status != "active":
+        if not current_user or prop.owner_id != current_user.id:
+            raise HTTPException(status_code=404, detail="Property not found")
+
+    return prop
+
+
+@router.post("/{property_id}/publish", response_model=PropertyOut)
+def publish_property(
+    property_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    prop = db.get(Property, property_id)
+    if not prop:
         raise HTTPException(status_code=404, detail="Property not found")
+
+    if prop.owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="You can only publish your own listings")
+
+    if prop.status not in ("draft",):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot publish a listing with status '{prop.status}'",
+        )
+
+    prop.status = "active"
+    db.commit()
+    db.refresh(prop)
+
+    logger.info("Property %s published by %s", prop.id, current_user.id)
+    return prop
+
+
+@router.post("/{property_id}/unpublish", response_model=PropertyOut)
+def unpublish_property(
+    property_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    prop = db.get(Property, property_id)
+    if not prop:
+        raise HTTPException(status_code=404, detail="Property not found")
+
+    if prop.owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="You can only unpublish your own listings")
+
+    if prop.status != "active":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot unpublish a listing with status '{prop.status}'",
+        )
+
+    prop.status = "draft"
+    db.commit()
+    db.refresh(prop)
+
+    logger.info("Property %s unpublished by %s", prop.id, current_user.id)
     return prop
