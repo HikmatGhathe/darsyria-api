@@ -35,5 +35,13 @@ class Settings(BaseSettings):
     google_client_secret: str = ""
     google_redirect_uri: str = "http://localhost:8000/auth/google/callback"
 
+    # Cloudflare R2 object storage
+    r2_account_id: str
+    r2_access_key_id: str
+    r2_secret_access_key: str
+    r2_bucket_name: str
+    r2_endpoint_url: str
+    r2_public_url: str
+
 
 settings = Settings()

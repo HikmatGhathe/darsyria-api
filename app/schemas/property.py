@@ -6,6 +6,18 @@ from uuid import UUID
 from pydantic import BaseModel, Field, ConfigDict
 
 
+class PropertyImageOut(BaseModel):
+    id: UUID
+    property_id: UUID
+    public_url: str
+    original_filename: Optional[str]
+    size_bytes: int
+    position: int
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 # What the client sends to create a property
 class PropertyCreate(BaseModel):
     title: str = Field(min_length=5, max_length=200)
@@ -47,6 +59,7 @@ class PropertyOut(BaseModel):
     document_status: str
     created_at: datetime
     updated_at: datetime
+    images: list[PropertyImageOut] = []
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -64,6 +77,7 @@ class PropertyListItem(BaseModel):
     area_sqm: Optional[int]
     document_status: str
     created_at: datetime
+    cover_image_url: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 

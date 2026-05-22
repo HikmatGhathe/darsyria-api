@@ -2,18 +2,28 @@ import logging
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.dependencies import get_current_user, get_optional_user
 from app.models.property import Property
+from app.models.property_image import PropertyImage
 from app.models.user import User
-from app.schemas.property import PropertyCreate, PropertyUpdate, PropertyOut, PropertyListItem
+from app.schemas.property import (
+    PropertyCreate,
+    PropertyUpdate,
+    PropertyOut,
+    PropertyListItem,
+    PropertyImageOut,
+)
+from app.services.r2_storage import upload_property_image, delete_object, delete_property_images, StorageError
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/properties", tags=["properties"])
+
+MAX_IMAGES_PER_PROPERTY = 10
 
 
 @router.post("", response_model=PropertyOut, status_code=status.HTTP_201_CREATED)
@@ -84,7 +94,19 @@ def list_properties(
     stmt = stmt.order_by(Property.created_at.desc()).limit(limit).offset(offset)
 
     results = db.execute(stmt).scalars().all()
-    return results
+
+    # Attach cover image URL (position=0) for each property
+    items = []
+    for prop in results:
+        cover = db.execute(
+            select(PropertyImage)
+            .where(PropertyImage.property_id == prop.id, PropertyImage.position == 0)
+        ).scalar_one_or_none()
+        item = PropertyListItem.model_validate(prop)
+        item.cover_image_url = cover.public_url if cover else None
+        items.append(item)
+
+    return items
 
 
 @router.get("/{property_id}", response_model=PropertyOut)
@@ -105,7 +127,15 @@ def get_property(
         if not current_user or prop.owner_id != current_user.id:
             raise HTTPException(status_code=404, detail="Property not found")
 
-    return prop
+    images = db.execute(
+        select(PropertyImage)
+        .where(PropertyImage.property_id == prop.id)
+        .order_by(PropertyImage.position)
+    ).scalars().all()
+
+    out = PropertyOut.model_validate(prop)
+    out.images = [PropertyImageOut.model_validate(img) for img in images]
+    return out
 
 
 @router.post("/{property_id}/publish", response_model=PropertyOut)
@@ -207,5 +237,179 @@ def delete_property(
     db.delete(prop)
     db.commit()
 
+    # Clean up R2 objects after DB commit — DB cascade already deleted the rows
+    try:
+        deleted = delete_property_images(str(property_id))
+        if deleted:
+            logger.info("Deleted %d R2 objects for property %s", deleted, property_id)
+    except StorageError:
+        logger.exception("R2 cleanup failed for property %s — orphaned objects may remain", property_id)
+
     logger.info("Property %s deleted by %s", property_id, current_user.id)
     return None
+
+
+# ---------------------------------------------------------------------------
+# Image endpoints
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/{property_id}/images",
+    response_model=PropertyImageOut,
+    status_code=status.HTTP_201_CREATED,
+)
+def upload_image(
+    property_id: UUID,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Upload one image for a property. Max 20 images per property."""
+    prop = db.get(Property, property_id)
+    if not prop:
+        raise HTTPException(status_code=404, detail="Property not found")
+    if prop.owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="You can only add images to your own listings")
+
+    count = db.execute(
+        select(PropertyImage).where(PropertyImage.property_id == property_id)
+    ).scalars().all()
+    if len(count) >= MAX_IMAGES_PER_PROPERTY:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Maximum {MAX_IMAGES_PER_PROPERTY} images per property",
+        )
+
+    raw_bytes = file.file.read()
+    try:
+        result = upload_property_image(
+            property_id=str(property_id),
+            raw_bytes=raw_bytes,
+            original_filename=file.filename,
+        )
+    except StorageError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    # New image goes to the end (highest position)
+    next_position = len(count)
+
+    image = PropertyImage(
+        property_id=property_id,
+        storage_key=result["storage_key"],
+        public_url=result["public_url"],
+        original_filename=result["original_filename"],
+        size_bytes=result["size_bytes"],
+        position=next_position,
+    )
+    db.add(image)
+    db.commit()
+    db.refresh(image)
+
+    logger.info("Image %s uploaded for property %s", image.id, property_id)
+    return image
+
+
+@router.get("/{property_id}/images", response_model=list[PropertyImageOut])
+def list_images(
+    property_id: UUID,
+    db: Session = Depends(get_db),
+):
+    """List all images for a property, ordered by position."""
+    prop = db.get(Property, property_id)
+    if not prop:
+        raise HTTPException(status_code=404, detail="Property not found")
+
+    images = db.execute(
+        select(PropertyImage)
+        .where(PropertyImage.property_id == property_id)
+        .order_by(PropertyImage.position)
+    ).scalars().all()
+    return images
+
+
+@router.delete(
+    "/{property_id}/images/{image_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def delete_image(
+    property_id: UUID,
+    image_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Delete one image. Reorders remaining images to fill the gap."""
+    prop = db.get(Property, property_id)
+    if not prop:
+        raise HTTPException(status_code=404, detail="Property not found")
+    if prop.owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="You can only delete images from your own listings")
+
+    image = db.get(PropertyImage, image_id)
+    if not image or image.property_id != property_id:
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    storage_key = image.storage_key
+    deleted_position = image.position
+
+    db.delete(image)
+    db.flush()
+
+    # Shift positions down for images after the deleted one
+    remaining = db.execute(
+        select(PropertyImage)
+        .where(
+            PropertyImage.property_id == property_id,
+            PropertyImage.position > deleted_position,
+        )
+        .order_by(PropertyImage.position)
+    ).scalars().all()
+
+    for img in remaining:
+        img.position -= 1
+
+    db.commit()
+
+    try:
+        delete_object(storage_key)
+    except StorageError:
+        logger.exception("R2 delete failed for key %s — orphaned object may remain", storage_key)
+
+    logger.info("Image %s deleted from property %s", image_id, property_id)
+    return None
+
+
+@router.patch("/{property_id}/images/reorder", response_model=list[PropertyImageOut])
+def reorder_images(
+    property_id: UUID,
+    image_ids: list[UUID],
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Reorder images by supplying ALL image IDs in the desired order.
+    First ID becomes position=0 (the cover image).
+    """
+    prop = db.get(Property, property_id)
+    if not prop:
+        raise HTTPException(status_code=404, detail="Property not found")
+    if prop.owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="You can only reorder images on your own listings")
+
+    existing = db.execute(
+        select(PropertyImage).where(PropertyImage.property_id == property_id)
+    ).scalars().all()
+
+    existing_ids = {img.id for img in existing}
+    if set(image_ids) != existing_ids:
+        raise HTTPException(
+            status_code=400,
+            detail="image_ids must contain exactly all image IDs for this property",
+        )
+
+    id_to_image = {img.id: img for img in existing}
+    for position, image_id in enumerate(image_ids):
+        id_to_image[image_id].position = position
+
+    db.commit()
+
+    return sorted(existing, key=lambda img: img.position)
