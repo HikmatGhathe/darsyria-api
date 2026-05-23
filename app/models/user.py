@@ -12,6 +12,7 @@ class User(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     email = Column(String(320), unique=True, nullable=False, index=True)
     full_name = Column(String(200), nullable=True)
+    phone = Column(String(40), nullable=True)
     locale = Column(String(5), nullable=False, default="en")
 
     # Profile / role

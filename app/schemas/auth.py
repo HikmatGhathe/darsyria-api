@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Optional
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
@@ -19,6 +20,7 @@ class UserPublic(BaseModel):
     id: UUID
     email: EmailStr
     full_name: str | None
+    phone: Optional[str] = None
     locale: str
     is_admin: bool
     subscription_tier: str
@@ -33,3 +35,9 @@ class AuthResponse(BaseModel):
 
 class GenericMessage(BaseModel):
     message: str
+
+
+class UserUpdate(BaseModel):
+    """Fields a user can update on their own profile."""
+    full_name: Optional[str] = Field(default=None, max_length=200)
+    phone: Optional[str] = Field(default=None, max_length=40)

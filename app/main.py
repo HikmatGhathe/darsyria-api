@@ -4,7 +4,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.routers import auth as auth_router, chat as chat_router, properties as properties_router
+from app.routers import auth as auth_router, chat as chat_router, properties as properties_router, conversations as conversations_router
 
 app = FastAPI(
     title="DarSyria API",
@@ -23,6 +23,7 @@ app.add_middleware(
 app.include_router(auth_router.router)
 app.include_router(chat_router.router)
 app.include_router(properties_router.router)
+app.include_router(conversations_router.router)
 
 
 @app.get("/health")
