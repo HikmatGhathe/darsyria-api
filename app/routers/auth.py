@@ -20,6 +20,7 @@ from app.services.auth_service import (
     create_magic_link_token,
     verify_magic_link_token,
 )
+from app.services.email_service import send_magic_link, EmailError
 from app.services.google_oauth_service import (
     build_authorization_url,
     consume_oauth_state,
@@ -57,12 +58,27 @@ def request_magic_link(
         f"?token={raw_token}"
     )
 
-    logger.warning("=" * 70)
-    logger.warning("MAGIC LINK (development only - would be sent via email)")
-    logger.warning("To:    %s", payload.email)
-    logger.warning("Link:  %s", magic_link)
-    logger.warning("Expires in %d minutes", settings.magic_link_expiration_minutes)
-    logger.warning("=" * 70)
+    # Try to send via email. If it fails, log the link as a fallback
+    # so the user can still complete sign-in during development.
+    try:
+        send_magic_link(
+            to_email=payload.email,
+            magic_link_url=magic_link,
+            locale=payload.locale,
+        )
+        logger.info("Magic link email sent to %s", payload.email)
+    except EmailError as e:
+        logger.error(
+            "Email send failed for %s — falling back to terminal: %s",
+            payload.email,
+            e,
+        )
+        logger.warning("=" * 70)
+        logger.warning("MAGIC LINK (email failed - fallback to terminal)")
+        logger.warning("To:    %s", payload.email)
+        logger.warning("Link:  %s", magic_link)
+        logger.warning("Expires in %d minutes", settings.magic_link_expiration_minutes)
+        logger.warning("=" * 70)
 
     return GenericMessage(message="If the email is valid, a login link has been sent.")
 

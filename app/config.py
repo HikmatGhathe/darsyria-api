@@ -43,5 +43,10 @@ class Settings(BaseSettings):
     r2_endpoint_url: str
     r2_public_url: str
 
+    # Resend email service
+    resend_api_key: str
+    email_from: str
+    email_from_name: str = "DarSyria"
+
 
 settings = Settings()
