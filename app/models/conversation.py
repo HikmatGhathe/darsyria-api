@@ -62,6 +62,11 @@ class Conversation(Base):
         index=True,
     )
 
+    # When we last sent an email notification for activity in this conversation.
+    # Used to debounce: if multiple messages arrive within DEBOUNCE_SECONDS,
+    # only one email is sent. Null = no email sent yet for this conversation.
+    last_notification_at = Column(DateTime(timezone=True), nullable=True)
+
     # Relationships (for SQLAlchemy convenience, not enforced in DB)
     messages = relationship(
         "Message",

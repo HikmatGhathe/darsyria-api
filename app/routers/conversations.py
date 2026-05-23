@@ -8,6 +8,7 @@ from sqlalchemy import select, or_, and_, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.database import get_db
 from app.dependencies import get_current_user
 from app.models.conversation import Conversation
@@ -23,6 +24,7 @@ from app.schemas.conversation import (
     MessageCreate,
     MessageOut,
 )
+from app.services.email_service import send_message_notification, EmailError
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/conversations", tags=["conversations"])
@@ -394,6 +396,54 @@ def send_message(
         msg.id,
         current_user.id,
     )
+
+    # Email notification to the OTHER party, with debounce.
+    # Only send if we haven't notified in the last 60 seconds for this conversation.
+    NOTIFICATION_DEBOUNCE_SECONDS = 60
+
+    should_notify = True
+    if conv.last_notification_at is not None:
+        last_notif = conv.last_notification_at
+        if last_notif.tzinfo is None:
+            last_notif = last_notif.replace(tzinfo=timezone.utc)
+        seconds_since_last = (datetime.now(timezone.utc) - last_notif).total_seconds()
+        if seconds_since_last < NOTIFICATION_DEBOUNCE_SECONDS:
+            should_notify = False
+
+    if should_notify:
+        recipient_id = conv.seller_id if current_user.id == conv.buyer_id else conv.buyer_id
+        recipient = db.get(User, recipient_id)
+
+        prop = db.get(Property, conv.property_id)
+        property_title = prop.title if prop else "your listing"
+
+        sender_name = _get_user_display_name(current_user) or "Someone"
+
+        recipient_locale = getattr(recipient, "locale", None) or "en"
+        if recipient_locale not in ("en", "de", "ar"):
+            recipient_locale = "en"
+        conversation_url = f"{settings.frontend_url}/{recipient_locale}/inbox/{conv.id}"
+
+        message_preview = msg.body if len(msg.body) <= 200 else msg.body[:199].rstrip() + "…"
+
+        if recipient and recipient.email:
+            try:
+                send_message_notification(
+                    to_email=recipient.email,
+                    sender_name=sender_name,
+                    property_title=property_title,
+                    message_preview=message_preview,
+                    conversation_url=conversation_url,
+                    locale=recipient_locale,
+                )
+                conv.last_notification_at = datetime.now(timezone.utc)
+                db.commit()
+            except EmailError as e:
+                logger.error(
+                    "Email notification failed for conversation %s: %s",
+                    conv.id,
+                    e,
+                )
 
     return msg
 
