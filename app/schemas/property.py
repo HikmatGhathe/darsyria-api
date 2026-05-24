@@ -57,6 +57,9 @@ class PropertyOut(BaseModel):
     area_sqm: Optional[int]
     status: str
     document_status: str
+    rejection_reason: Optional[str] = None
+    flagged_at: Optional[datetime] = None
+    reviewed_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
     images: list[PropertyImageOut] = []
@@ -102,3 +105,27 @@ class PropertyUpdate(BaseModel):
         default=None,
         pattern="^(none|claimed|documents_provided)$",
     )
+
+
+# ---------------------------------------------------------------------------
+# Admin-only schemas
+# ---------------------------------------------------------------------------
+
+class PropertyRejectRequest(BaseModel):
+    """Body for the admin reject/remove endpoint."""
+    reason: str = Field(min_length=10, max_length=2000)
+
+
+class PropertyAdminListItem(BaseModel):
+    """Lightweight row for the admin listings dashboard."""
+    id: UUID
+    owner_id: UUID
+    title: str
+    city: str
+    status: str
+    document_status: str
+    flagged_at: Optional[datetime] = None
+    reviewed_at: Optional[datetime] = None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)

@@ -310,3 +310,142 @@ def send_message_notification(
         result.get("id") if isinstance(result, dict) else "?",
         locale,
     )
+
+
+# ---------------------------------------------------------------------------
+# Listing rejection / removal email
+# ---------------------------------------------------------------------------
+
+REJECTION_SUBJECTS = {
+    "en": "Your DarSyria listing has been removed",
+    "de": "Ihr DarSyria-Inserat wurde entfernt",
+    "ar": "تم إزالة إعلانك على دار سوريا",
+}
+
+
+def _rejection_html(locale: str, property_title: str, reason: str) -> str:
+    """Render the listing-rejection email body for the given locale."""
+    is_rtl = locale == "ar"
+    dir_attr = "rtl" if is_rtl else "ltr"
+    text_align = "right" if is_rtl else "left"
+
+    copy = {
+        "en": {
+            "heading": "Your listing has been removed",
+            "intro": f"Your listing <strong>{property_title}</strong> has been removed by a DarSyria moderator.",
+            "reason_label": "Reason:",
+            "footer": "If you believe this decision was made in error, please contact support.",
+            "signature": "— The DarSyria team",
+        },
+        "de": {
+            "heading": "Ihr Inserat wurde entfernt",
+            "intro": f"Ihr Inserat <strong>{property_title}</strong> wurde von einem DarSyria-Moderator entfernt.",
+            "reason_label": "Grund:",
+            "footer": "Wenn Sie der Meinung sind, dass diese Entscheidung irrtümlich getroffen wurde, wenden Sie sich bitte an den Support.",
+            "signature": "— Das DarSyria-Team",
+        },
+        "ar": {
+            "heading": "تم إزالة إعلانك",
+            "intro": f"تم إزالة إعلانك <strong>{property_title}</strong> من قبل أحد مشرفي دار سوريا.",
+            "reason_label": "السبب:",
+            "footer": "إذا كنت تعتقد أن هذا القرار كان خطأً، يرجى التواصل مع الدعم.",
+            "signature": "— فريق دار سوريا",
+        },
+    }
+    c = copy.get(locale, copy["en"])
+
+    return f"""<!DOCTYPE html>
+<html dir="{dir_attr}" lang="{locale}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="margin:0;padding:0;background-color:#f6f6f6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f6f6f6;padding:40px 20px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;background-color:#ffffff;border-radius:8px;border:1px solid #e5e5e5;overflow:hidden;">
+          <tr>
+            <td style="padding:32px;text-align:{text_align};color:#111111;">
+              <h1 style="font-size:20px;font-weight:600;margin:0 0 16px 0;color:#111111;">{c['heading']}</h1>
+              <p style="font-size:15px;line-height:1.55;margin:0 0 16px 0;color:#444444;">{c['intro']}</p>
+              <p style="font-size:13px;font-weight:600;margin:0 0 8px 0;color:#111111;">{c['reason_label']}</p>
+              <div style="background-color:#fef2f2;border-left:3px solid #dc2626;padding:12px 16px;border-radius:4px;margin:0 0 24px 0;">
+                <p style="font-size:14px;line-height:1.55;margin:0;color:#7f1d1d;white-space:pre-wrap;">{reason}</p>
+              </div>
+              <hr style="border:none;border-top:1px solid #e5e5e5;margin:24px 0;">
+              <p style="font-size:13px;line-height:1.5;margin:0 0 8px 0;color:#888888;">{c['footer']}</p>
+              <p style="font-size:13px;line-height:1.5;margin:0;color:#888888;">{c['signature']}</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>"""
+
+
+def _rejection_text(locale: str, property_title: str, reason: str) -> str:
+    """Plain-text rejection email."""
+    if locale == "de":
+        return (
+            f"Ihr Inserat wurde entfernt\n\n"
+            f"Ihr Inserat \"{property_title}\" wurde von einem DarSyria-Moderator entfernt.\n\n"
+            f"Grund:\n{reason}\n\n"
+            f"Wenn Sie der Meinung sind, dass dies irrtümlich war, wenden Sie sich bitte an den Support.\n\n"
+            f"— Das DarSyria-Team"
+        )
+    if locale == "ar":
+        return (
+            f"تم إزالة إعلانك\n\n"
+            f"تم إزالة إعلانك \"{property_title}\" من قبل أحد مشرفي دار سوريا.\n\n"
+            f"السبب:\n{reason}\n\n"
+            f"إذا كنت تعتقد أن هذا كان خطأً، يرجى التواصل مع الدعم.\n\n"
+            f"— فريق دار سوريا"
+        )
+    return (
+        f"Your listing has been removed\n\n"
+        f"Your listing \"{property_title}\" has been removed by a DarSyria moderator.\n\n"
+        f"Reason:\n{reason}\n\n"
+        f"If you believe this was an error, please contact support.\n\n"
+        f"— The DarSyria team"
+    )
+
+
+def send_rejection_notification(
+    to_email: str,
+    property_title: str,
+    reason: str,
+    locale: str = "en",
+) -> None:
+    """
+    Notify a property owner that their listing has been removed by an admin.
+
+    `reason` is the plain-text explanation supplied by the moderator.
+    Raises EmailError if Resend rejects the send.
+    """
+    if locale not in REJECTION_SUBJECTS:
+        locale = "en"
+
+    from_address = f"{settings.email_from_name} <{settings.email_from}>"
+    subject = REJECTION_SUBJECTS[locale]
+
+    try:
+        result = resend.Emails.send({
+            "from": from_address,
+            "to": to_email,
+            "subject": subject,
+            "html": _rejection_html(locale, property_title, reason),
+            "text": _rejection_text(locale, property_title, reason),
+        })
+    except Exception as e:
+        logger.exception("Resend send failed for rejection notification to %s", to_email)
+        raise EmailError(f"Could not send rejection email: {e}") from e
+
+    logger.info(
+        "Rejection notification sent to %s (resend_id=%s, locale=%s)",
+        to_email,
+        result.get("id") if isinstance(result, dict) else "?",
+        locale,
+    )

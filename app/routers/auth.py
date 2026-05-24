@@ -14,6 +14,7 @@ from app.schemas.auth import (
     MagicLinkRequest,
     MagicLinkVerifyRequest,
     UserPublic,
+    UserUpdate,
 )
 from app.services.auth_service import (
     create_access_token,
@@ -112,6 +113,44 @@ def verify_magic_link(
 def get_me(current_user: User = Depends(get_current_user)):
     """Return the currently authenticated user."""
     return UserPublic.model_validate(current_user)
+
+
+@router.patch("/me", response_model=UserPublic)
+def update_me(
+    payload: UserUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Update the current user's profile. Only full_name and phone are updatable.
+    Other fields (email, is_admin, etc.) are not editable through this endpoint.
+    """
+    updates = payload.model_dump(exclude_unset=True)
+
+    if not updates:
+        return current_user
+
+    # Defensive: ignore any keys that aren't in the allow-list
+    allowed = {"full_name", "phone", "locale"}
+    for field, value in updates.items():
+        if field not in allowed:
+            continue
+        # Normalize empty strings to None so the DB stores NULL instead of ""
+        if isinstance(value, str):
+            value = value.strip()
+            if value == "":
+                value = None
+        setattr(current_user, field, value)
+
+    db.commit()
+    db.refresh(current_user)
+
+    logger.info(
+        "User %s updated profile (fields: %s)",
+        current_user.id,
+        list(updates.keys()),
+    )
+    return current_user
 
 
 @router.post("/logout", response_model=GenericMessage)

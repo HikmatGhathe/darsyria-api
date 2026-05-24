@@ -41,3 +41,4 @@ class UserUpdate(BaseModel):
     """Fields a user can update on their own profile."""
     full_name: Optional[str] = Field(default=None, max_length=200)
     phone: Optional[str] = Field(default=None, max_length=40)
+    locale: Optional[str] = Field(default=None, pattern="^(ar|de|en)$")

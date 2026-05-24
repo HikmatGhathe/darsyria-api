@@ -61,6 +61,14 @@ class Property(Base):
     # Values: "claimed", "documents_provided", "none"
     document_status = Column(String(30), nullable=False, default="none")
 
+    # Admin moderation fields
+    # rejection_reason: set when an admin rejects/removes a listing
+    # flagged_at: timestamp when listing was flagged for review
+    # reviewed_at: timestamp when an admin last reviewed the listing
+    rejection_reason = Column(Text, nullable=True)
+    flagged_at = Column(DateTime(timezone=True), nullable=True)
+    reviewed_at = Column(DateTime(timezone=True), nullable=True)
+
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at = Column(
         DateTime(timezone=True),

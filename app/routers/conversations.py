@@ -419,7 +419,7 @@ def send_message(
 
         sender_name = _get_user_display_name(current_user) or "Someone"
 
-        recipient_locale = getattr(recipient, "locale", None) or "en"
+        recipient_locale = recipient.locale if recipient.locale else "en"
         if recipient_locale not in ("en", "de", "ar"):
             recipient_locale = "en"
         conversation_url = f"{settings.frontend_url}/{recipient_locale}/inbox/{conv.id}"
@@ -544,5 +544,45 @@ def reveal_contact(
 
     db.commit()
     db.refresh(conv)
+
+    return _build_conversation_out(db, conv, current_user)
+
+
+# ---------------------------------------------------------------------------
+# Lookup conversation by property (for the "Contact seller" button)
+# ---------------------------------------------------------------------------
+
+@router.get("/by-property/{property_id}", response_model=Optional[ConversationOut])
+def get_my_conversation_for_property(
+    property_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Returns the conversation between current_user (as buyer) and the property's
+    owner (as seller), if one exists. Returns null if no conversation has been
+    started yet.
+
+    Used by the "Contact seller" button to decide between "Send message" (no
+    existing thread) and "Open conversation" (existing thread).
+    """
+    prop = db.get(Property, property_id)
+    if not prop:
+        raise HTTPException(status_code=404, detail="Property not found")
+
+    # If the current user is the owner, they're not a "buyer" — return null
+    if prop.owner_id == current_user.id:
+        return None
+
+    conv = db.execute(
+        select(Conversation).where(
+            Conversation.property_id == property_id,
+            Conversation.buyer_id == current_user.id,
+            Conversation.seller_id == prop.owner_id,
+        )
+    ).scalar_one_or_none()
+
+    if not conv:
+        return None
 
     return _build_conversation_out(db, conv, current_user)
