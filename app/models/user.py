@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import Boolean, Column, DateTime, String, func
+from sqlalchemy import Boolean, Column, DateTime, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 
 from app.database import Base
@@ -18,6 +18,10 @@ class User(Base):
     # Profile / role
     is_active = Column(Boolean, nullable=False, default=True)
     is_admin = Column(Boolean, nullable=False, default=False)
+
+    # Moderation — set when an admin bans the account
+    ban_reason = Column(Text, nullable=True)
+    banned_at = Column(DateTime(timezone=True), nullable=True)
 
     # OAuth provider info (for Google login)
     oauth_provider = Column(String(50), nullable=True)  # "google" or null for magic link

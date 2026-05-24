@@ -39,7 +39,10 @@ def get_current_user(
     if not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Account is disabled",
+            detail={
+                "code": "account_suspended",
+                "reason": user.ban_reason or "Your account has been suspended.",
+            },
         )
 
     return user
