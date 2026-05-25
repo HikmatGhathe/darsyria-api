@@ -10,7 +10,7 @@ from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query
-from sqlalchemy import select
+from sqlalchemy import select, or_
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -44,6 +44,7 @@ def _get_property_or_404(db: Session, property_id: UUID) -> Property:
 def admin_list_properties(
     prop_status: Optional[str] = Query(default=None, alias="status"),
     flagged_only: bool = Query(default=False),
+    search: Optional[str] = Query(default=None, max_length=200),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
@@ -52,8 +53,9 @@ def admin_list_properties(
     """
     List all properties for admin moderation.
 
-    - Filter by status (draft, active, removed) via ?status=
+    - Filter by status (draft, active, rejected, removed) via ?status=
     - Filter to only flagged listings via ?flagged_only=true
+    - Full-text search across title and owner email via ?search=
     - Paginate with ?limit=&offset=
     """
     q = select(Property)
@@ -64,10 +66,35 @@ def admin_list_properties(
     if flagged_only:
         q = q.where(Property.flagged_at.is_not(None))
 
-    q = q.order_by(Property.created_at.desc()).offset(offset).limit(limit)
+    if search:
+        like = f"%{search}%"
+        q = q.join(User, Property.owner_id == User.id).where(
+            or_(Property.title.ilike(like), User.email.ilike(like))
+        )
 
+    q = q.order_by(Property.created_at.desc()).offset(offset).limit(limit)
     properties = db.execute(q).scalars().all()
-    return properties
+
+    # Build items with owner_email — N+1 is fine at our scale
+    items = []
+    for prop in properties:
+        owner = db.get(User, prop.owner_id)
+        items.append(PropertyAdminListItem(
+            id=prop.id,
+            owner_id=prop.owner_id,
+            owner_email=owner.email if owner else None,
+            title=prop.title,
+            city=prop.city,
+            price_amount=prop.price_amount,
+            price_currency=prop.price_currency,
+            status=prop.status,
+            document_status=prop.document_status,
+            flagged_at=prop.flagged_at,
+            reviewed_at=prop.reviewed_at,
+            rejection_reason=prop.rejection_reason,
+            created_at=prop.created_at,
+        ))
+    return items
 
 
 # ---------------------------------------------------------------------------

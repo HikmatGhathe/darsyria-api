@@ -120,12 +120,16 @@ class PropertyAdminListItem(BaseModel):
     """Lightweight row for the admin listings dashboard."""
     id: UUID
     owner_id: UUID
+    owner_email: Optional[str] = None
     title: str
     city: str
+    price_amount: Decimal
+    price_currency: str
     status: str
     document_status: str
     flagged_at: Optional[datetime] = None
     reviewed_at: Optional[datetime] = None
+    rejection_reason: Optional[str] = None
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
