@@ -11,10 +11,17 @@ class Settings(BaseSettings):
     app_env: str = "development"
     secret_key: str
 
-    # JWT
+    # JWT access token (short-lived; lives in an httpOnly cookie)
     jwt_secret: str
     jwt_algorithm: str = "HS256"
-    jwt_expiration_minutes: int = 10080
+    jwt_expiration_minutes: int = 30
+
+    # Refresh token (long-lived, opaque, rotated on use; httpOnly cookie scoped to /auth)
+    refresh_token_expiration_days: int = 30
+
+    @property
+    def cookie_secure(self) -> bool:
+        return self.app_env == "production"
 
     # Magic link
     magic_link_expiration_minutes: int = 15

@@ -1,7 +1,7 @@
 import hashlib
 import secrets
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Optional, Tuple
 from uuid import UUID
 
 from jose import JWTError, jwt
@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.models.magic_link_token import MagicLinkToken
+from app.models.refresh_token import RefreshToken
 from app.models.user import User
 
 
@@ -143,3 +144,72 @@ def get_user_from_token(db: Session, token: str) -> Optional[User]:
         return None
 
     return db.query(User).filter(User.id == parsed_user_id).first()
+
+
+# ----- Refresh tokens -----
+
+def create_refresh_token(db: Session, user: User) -> str:
+    """
+    Create a new opaque refresh token for the user.
+    Returns the raw token to be set in the httpOnly cookie. Only the hash
+    is stored.
+    """
+    raw_token = secrets.token_urlsafe(32)
+    token_hash = hash_token(raw_token)
+    expires_at = datetime.now(timezone.utc) + timedelta(
+        days=settings.refresh_token_expiration_days
+    )
+
+    db_token = RefreshToken(
+        user_id=user.id,
+        token_hash=token_hash,
+        expires_at=expires_at,
+    )
+    db.add(db_token)
+    db.commit()
+
+    return raw_token
+
+
+def verify_and_rotate_refresh_token(
+    db: Session, raw_token: str
+) -> Optional[Tuple[User, str]]:
+    """
+    Validate a raw refresh token. If valid, revoke it and issue a new one
+    (rotation limits the damage if a token is ever intercepted/replayed).
+    Returns (user, new_raw_token) or None if invalid/expired/revoked/user missing.
+    """
+    now = datetime.now(timezone.utc)
+    token_hash = hash_token(raw_token)
+
+    db_token = (
+        db.query(RefreshToken)
+        .filter(RefreshToken.token_hash == token_hash)
+        .with_for_update()
+        .first()
+    )
+    if not db_token:
+        return None
+    if db_token.revoked_at is not None:
+        return None
+    if db_token.expires_at < now:
+        return None
+
+    user = db.query(User).filter(User.id == db_token.user_id).first()
+    if user is None or not user.is_active:
+        return None
+
+    db_token.revoked_at = now
+    db.commit()
+
+    new_raw_token = create_refresh_token(db, user)
+    return user, new_raw_token
+
+
+def revoke_refresh_token(db: Session, raw_token: str) -> None:
+    """Revoke a refresh token (used on logout). Silently no-ops if not found."""
+    token_hash = hash_token(raw_token)
+    db_token = db.query(RefreshToken).filter(RefreshToken.token_hash == token_hash).first()
+    if db_token and db_token.revoked_at is None:
+        db_token.revoked_at = datetime.now(timezone.utc)
+        db.commit()

@@ -28,8 +28,11 @@ class UserPublic(BaseModel):
 
 
 class AuthResponse(BaseModel):
-    access_token: str
-    token_type: str = "bearer"
+    """
+    The access/refresh tokens are never in this body — they're set as
+    httpOnly cookies on the response instead, so they're not reachable
+    from JS (XSS-resistant).
+    """
     user: UserPublic
 
 

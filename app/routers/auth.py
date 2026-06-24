@@ -1,10 +1,11 @@
 import logging
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.cookies import REFRESH_TOKEN_COOKIE, clear_auth_cookies, set_auth_cookies
 from app.database import get_db
 from app.dependencies import get_current_user
 from app.limiter import limiter
@@ -20,6 +21,9 @@ from app.schemas.auth import (
 from app.services.auth_service import (
     create_access_token,
     create_magic_link_token,
+    create_refresh_token,
+    revoke_refresh_token,
+    verify_and_rotate_refresh_token,
     verify_magic_link_token,
 )
 from app.services.email_service import send_magic_link, EmailError
@@ -101,9 +105,10 @@ def request_magic_link(
 @router.post("/magic-link/verify", response_model=AuthResponse)
 def verify_magic_link(
     payload: MagicLinkVerifyRequest,
+    response: Response,
     db: Session = Depends(get_db),
 ):
-    """Verify a magic link token and return a JWT."""
+    """Verify a magic link token and set the auth cookies."""
     user = verify_magic_link_token(db, payload.token)
     if not user:
         raise HTTPException(
@@ -117,10 +122,40 @@ def verify_magic_link(
         )
 
     access_token = create_access_token(user)
-    return AuthResponse(
-        access_token=access_token,
-        user=UserPublic.model_validate(user),
-    )
+    refresh_token = create_refresh_token(db, user)
+    set_auth_cookies(response, access_token, refresh_token)
+
+    return AuthResponse(user=UserPublic.model_validate(user))
+
+
+@router.post("/refresh", response_model=AuthResponse)
+def refresh_session(
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+):
+    """
+    Exchange a valid refresh-token cookie for a new access token (and a
+    rotated refresh token). Called by the frontend when an API request
+    comes back 401 because the short-lived access token expired.
+    """
+    raw_refresh_token = request.cookies.get(REFRESH_TOKEN_COOKIE)
+    if not raw_refresh_token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+
+    result = verify_and_rotate_refresh_token(db, raw_refresh_token)
+    if result is None:
+        clear_auth_cookies(response)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired refresh token",
+        )
+
+    user, new_refresh_token = result
+    access_token = create_access_token(user)
+    set_auth_cookies(response, access_token, new_refresh_token)
+
+    return AuthResponse(user=UserPublic.model_validate(user))
 
 
 @router.get("/me", response_model=UserPublic)
@@ -168,12 +203,20 @@ def update_me(
 
 
 @router.post("/logout", response_model=GenericMessage)
-def logout(current_user: User = Depends(get_current_user)):
+def logout(
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+):
     """
-    Stateless logout: the frontend simply discards the JWT.
-    This endpoint exists for symmetry and for future server-side
-    session revocation if we ever add it.
+    Revoke the refresh token server-side (so it can't be replayed even if
+    leaked) and clear both auth cookies.
     """
+    raw_refresh_token = request.cookies.get(REFRESH_TOKEN_COOKIE)
+    if raw_refresh_token:
+        revoke_refresh_token(db, raw_refresh_token)
+
+    clear_auth_cookies(response)
     return GenericMessage(message="Logged out")
 
 
@@ -229,7 +272,13 @@ def google_callback(
         )
 
     access_token = create_access_token(user)
-    return RedirectResponse(
-        url=f"{settings.frontend_url}/{locale}/auth/verify#access_token={access_token}",
+    refresh_token = create_refresh_token(db, user)
+
+    # Set cookies directly on the redirect response — no token in the URL,
+    # so it never appears in browser history or referrer headers.
+    redirect = RedirectResponse(
+        url=f"{settings.frontend_url}/{locale}/auth/verify?oauth=success",
         status_code=302,
     )
+    set_auth_cookies(redirect, access_token, refresh_token)
+    return redirect
