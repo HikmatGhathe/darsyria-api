@@ -187,7 +187,7 @@ def update_me(
 
     # Defensive: ignore any keys that aren't in the allow-list
     allowed = {
-        "full_name", "phone", "locale",
+        "full_name", "phone", "phone_public", "locale",
         "account_type", "company_name", "company_about",
         "company_website", "company_address",
     }

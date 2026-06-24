@@ -13,6 +13,11 @@ class User(Base):
     email = Column(String(320), unique=True, nullable=False, index=True)
     full_name = Column(String(200), nullable=True)
     phone = Column(String(40), nullable=True)
+    # When True, an individual seller has chosen to show their phone publicly
+    # on their seller profile. Default False — individuals stay private and
+    # only share via the mutual-consent reveal in conversations. Companies
+    # show their phone regardless of this flag.
+    phone_public = Column(Boolean, nullable=False, default=False, server_default="false")
     locale = Column(String(5), nullable=False, default="en")
 
     # Profile / role

@@ -21,6 +21,7 @@ class UserPublic(BaseModel):
     email: EmailStr
     full_name: str | None
     phone: Optional[str] = None
+    phone_public: bool = False
     locale: str
     is_admin: bool
     subscription_tier: str
@@ -51,6 +52,7 @@ class UserUpdate(BaseModel):
     """Fields a user can update on their own profile."""
     full_name: Optional[str] = Field(default=None, max_length=200)
     phone: Optional[str] = Field(default=None, max_length=40)
+    phone_public: Optional[bool] = None
     locale: Optional[str] = Field(default=None, pattern="^(ar|de|en)$")
 
     account_type: Optional[str] = Field(default=None, pattern="^(individual|company)$")

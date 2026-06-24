@@ -67,6 +67,10 @@ def get_seller_profile(
     """
     seller = _get_visible_seller(db, user_id)
     is_company = seller.account_type == "company"
+    # Company phones are always public; an individual's phone is public only
+    # if they opted in. (Non-opted-in individuals share only via the
+    # mutual-consent reveal inside a conversation.)
+    show_phone = is_company or seller.phone_public
 
     follower_count = db.execute(
         select(func.count(Follow.id)).where(Follow.followed_user_id == user_id)
@@ -94,7 +98,7 @@ def get_seller_profile(
         company_about=seller.company_about if is_company else None,
         company_website=seller.company_website if is_company else None,
         company_address=seller.company_address if is_company else None,
-        phone=seller.phone if is_company else None,
+        phone=seller.phone if show_phone else None,
         listings=_active_listings_for_owner(db, seller),
     )
 
