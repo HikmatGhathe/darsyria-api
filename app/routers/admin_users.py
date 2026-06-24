@@ -32,12 +32,14 @@ def list_all_users(
     search: Optional[str] = Query(default=None, max_length=200),
     banned_only: bool = Query(default=False),
     admins_only: bool = Query(default=False),
+    pending_verification_only: bool = Query(default=False),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ):
     """
     List all users for admin moderation.
-    Filters: search (email or full_name), banned_only, admins_only.
+    Filters: search (email, full_name, or company_name), banned_only,
+    admins_only, pending_verification_only.
     Default sort: newest first.
     """
     stmt = select(User)
@@ -48,12 +50,15 @@ def list_all_users(
             or_(
                 User.email.ilike(like),
                 User.full_name.ilike(like),
+                User.company_name.ilike(like),
             )
         )
     if banned_only:
         stmt = stmt.where(User.is_active.is_(False))
     if admins_only:
         stmt = stmt.where(User.is_admin.is_(True))
+    if pending_verification_only:
+        stmt = stmt.where(User.verification_status == "pending")
 
     stmt = stmt.order_by(User.created_at.desc()).limit(limit).offset(offset)
 
@@ -78,6 +83,9 @@ def list_all_users(
             created_at=u.created_at,
             last_login_at=u.last_login_at,
             active_listings_count=active_count,
+            account_type=u.account_type,
+            company_name=u.company_name,
+            verification_status=u.verification_status,
         ))
 
     return items
@@ -219,4 +227,52 @@ def demote_from_admin(
     db.refresh(user)
 
     logger.info("User %s (%s) demoted by admin %s", user.id, user.email, admin.id)
+    return user
+
+
+@router.post("/{user_id}/verify", response_model=UserOut)
+def verify_seller(
+    user_id: UUID,
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    """
+    Mark a seller as verified. This only controls whether the "Verified
+    seller" badge shows on their public profile — it never gates whether
+    they can list properties or use the platform.
+    """
+    user = db.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if user.verification_status == "verified":
+        return user  # already verified, idempotent
+
+    user.verification_status = "verified"
+    db.commit()
+    db.refresh(user)
+
+    logger.info("User %s (%s) verified by admin %s", user.id, user.email, admin.id)
+    return user
+
+
+@router.post("/{user_id}/unverify", response_model=UserOut)
+def unverify_seller(
+    user_id: UUID,
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    """Revoke a seller's verified status, e.g. if their info turns out to be false."""
+    user = db.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if user.verification_status != "verified":
+        return user  # already not verified, idempotent
+
+    user.verification_status = "pending"
+    db.commit()
+    db.refresh(user)
+
+    logger.info("User %s (%s) unverified by admin %s", user.id, user.email, admin.id)
     return user

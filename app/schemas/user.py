@@ -19,6 +19,9 @@ class UserOut(BaseModel):
     subscription_tier: str
     created_at: datetime
     last_login_at: Optional[datetime] = None
+    account_type: Optional[str] = None
+    company_name: Optional[str] = None
+    verification_status: str = "unverified"
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -42,5 +45,8 @@ class UserAdminListItem(BaseModel):
     last_login_at: Optional[datetime] = None
     # Quick stats — useful for admins eyeballing the list
     active_listings_count: int = 0
+    account_type: Optional[str] = None
+    company_name: Optional[str] = None
+    verification_status: str = "unverified"
 
     model_config = ConfigDict(from_attributes=True)

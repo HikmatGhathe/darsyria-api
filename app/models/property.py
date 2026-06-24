@@ -69,6 +69,11 @@ class Property(Base):
     flagged_at = Column(DateTime(timezone=True), nullable=True)
     reviewed_at = Column(DateTime(timezone=True), nullable=True)
 
+    # Set the first time this listing goes draft -> active. Distinct from
+    # created_at: a draft can sit unpublished for days, and the "new listing"
+    # digest for followers keys off this, not creation time.
+    published_at = Column(DateTime(timezone=True), nullable=True, index=True)
+
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at = Column(
         DateTime(timezone=True),

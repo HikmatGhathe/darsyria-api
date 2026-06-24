@@ -26,6 +26,13 @@ class UserPublic(BaseModel):
     subscription_tier: str
     created_at: datetime
 
+    account_type: Optional[str] = None
+    company_name: Optional[str] = None
+    company_about: Optional[str] = None
+    company_website: Optional[str] = None
+    company_address: Optional[str] = None
+    verification_status: str = "unverified"
+
 
 class AuthResponse(BaseModel):
     """
@@ -45,3 +52,9 @@ class UserUpdate(BaseModel):
     full_name: Optional[str] = Field(default=None, max_length=200)
     phone: Optional[str] = Field(default=None, max_length=40)
     locale: Optional[str] = Field(default=None, pattern="^(ar|de|en)$")
+
+    account_type: Optional[str] = Field(default=None, pattern="^(individual|company)$")
+    company_name: Optional[str] = Field(default=None, max_length=200)
+    company_about: Optional[str] = Field(default=None, max_length=4000)
+    company_website: Optional[str] = Field(default=None, max_length=300)
+    company_address: Optional[str] = Field(default=None, max_length=2000)

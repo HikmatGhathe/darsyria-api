@@ -35,6 +35,22 @@ class User(Base):
     # Monetization placeholder
     subscription_tier = Column(String(20), nullable=False, default="free")
 
+    # Seller identity. account_type is set the first time a user goes to
+    # list a property — buyers who never list anything never touch these.
+    account_type = Column(String(20), nullable=True)  # "individual" | "company" | NULL
+    company_name = Column(String(200), nullable=True)
+    company_about = Column(Text, nullable=True)
+    company_website = Column(String(300), nullable=True)
+    # Required when account_type == "company". Shown publicly on the seller
+    # profile (unlike an individual's phone, which stays behind the
+    # mutual-consent reveal in conversations) since a business wants to be
+    # found and called.
+    company_address = Column(Text, nullable=True)
+
+    # Admin-reviewed trust badge — never gates listing/using the platform,
+    # only controls whether the "Verified seller" badge shows.
+    verification_status = Column(String(20), nullable=False, default="unverified")  # unverified | pending | verified
+
     # Timestamps
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at = Column(

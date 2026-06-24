@@ -176,8 +176,9 @@ def update_me(
     current_user: User = Depends(get_current_user),
 ):
     """
-    Update the current user's profile. Only full_name and phone are updatable.
-    Other fields (email, is_admin, etc.) are not editable through this endpoint.
+    Update the current user's profile. Only a fixed allow-list of fields is
+    editable. Other fields (email, is_admin, verification_status, etc.) are
+    not editable through this endpoint.
     """
     updates = payload.model_dump(exclude_unset=True)
 
@@ -185,7 +186,11 @@ def update_me(
         return current_user
 
     # Defensive: ignore any keys that aren't in the allow-list
-    allowed = {"full_name", "phone", "locale"}
+    allowed = {
+        "full_name", "phone", "locale",
+        "account_type", "company_name", "company_about",
+        "company_website", "company_address",
+    }
     for field, value in updates.items():
         if field not in allowed:
             continue
@@ -195,6 +200,28 @@ def update_me(
             if value == "":
                 value = None
         setattr(current_user, field, value)
+
+    # Companies are public-facing — name, address, and a phone number are
+    # required so the seller profile says something useful, and so the
+    # number is real before it's shown to buyers with no consent gate
+    # (unlike an individual's phone, which stays behind conversation reveal).
+    if current_user.account_type == "company":
+        missing = [
+            label for label, val in (
+                ("company_name", current_user.company_name),
+                ("company_address", current_user.company_address),
+                ("phone", current_user.phone),
+            )
+            if not val
+        ]
+        if missing:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Company accounts require: {', '.join(missing)}",
+            )
+        # First time all required fields are present, queue for admin review.
+        if current_user.verification_status == "unverified":
+            current_user.verification_status = "pending"
 
     db.commit()
     db.refresh(current_user)
