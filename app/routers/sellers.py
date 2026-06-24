@@ -3,7 +3,7 @@ from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -22,18 +22,23 @@ router = APIRouter(prefix="/sellers", tags=["sellers"])
 
 
 def _active_listings_for_owner(db: Session, owner: User) -> list[PropertyListItem]:
+    # Cover image (position 0) joined in the same query — one query for the
+    # whole profile instead of one extra lookup per listing.
     results = db.execute(
-        select(Property)
+        select(Property, PropertyImage)
+        .outerjoin(
+            PropertyImage,
+            and_(
+                PropertyImage.property_id == Property.id,
+                PropertyImage.position == 0,
+            ),
+        )
         .where(Property.owner_id == owner.id, Property.status == "active")
         .order_by(Property.created_at.desc())
-    ).scalars().all()
+    ).all()
 
     items = []
-    for prop in results:
-        cover = db.execute(
-            select(PropertyImage)
-            .where(PropertyImage.property_id == prop.id, PropertyImage.position == 0)
-        ).scalar_one_or_none()
+    for prop, cover in results:
         item = PropertyListItem.model_validate(prop)
         item.cover_image_url = cover.public_url if cover else None
         item.seller_display_name = seller_display_name(owner)

@@ -4,7 +4,7 @@ from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, status
-from sqlalchemy import select
+from sqlalchemy import and_, select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -81,9 +81,18 @@ def list_properties(
     Public listing browser. Only returns 'active' status.
     Filters: city, property_type, price range, rooms, seller/company name.
     """
+    # Cover image (position 0) is joined in the same query — one query for
+    # the whole page instead of one extra lookup per listing.
     stmt = (
-        select(Property, User)
+        select(Property, User, PropertyImage)
         .join(User, Property.owner_id == User.id)
+        .outerjoin(
+            PropertyImage,
+            and_(
+                PropertyImage.property_id == Property.id,
+                PropertyImage.position == 0,
+            ),
+        )
         .where(Property.status == "active")
     )
 
@@ -107,13 +116,8 @@ def list_properties(
 
     results = db.execute(stmt).all()
 
-    # Attach cover image URL (position=0) and seller info for each property
     items = []
-    for prop, owner in results:
-        cover = db.execute(
-            select(PropertyImage)
-            .where(PropertyImage.property_id == prop.id, PropertyImage.position == 0)
-        ).scalar_one_or_none()
+    for prop, owner, cover in results:
         item = PropertyListItem.model_validate(prop)
         item.cover_image_url = cover.public_url if cover else None
         item.seller_display_name = seller_display_name(owner)
