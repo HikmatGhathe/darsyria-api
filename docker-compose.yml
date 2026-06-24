@@ -17,5 +17,38 @@ services:
       timeout: 5s
       retries: 5
 
+  api:
+    build:
+      context: .
+    container_name: darsyria-api
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Override the host .env value: inside the compose network, Postgres
+      # is reachable by service name, not "localhost".
+      DATABASE_URL: postgresql://${POSTGRES_USER:-darsyria}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-darsyria}
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      # Persist the embedding model cache so it survives container restarts
+      # instead of re-downloading ~1.3GB on every redeploy.
+      - embedding_cache:/root/.cache
+
+  frontend:
+    build:
+      context: ../darsyria
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+    container_name: darsyria-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+
 volumes:
   postgres_data:
+  embedding_cache:
