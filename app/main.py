@@ -1,3 +1,8 @@
+import asyncio
+import logging
+from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
+
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
@@ -6,14 +11,54 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.database import get_db
+from app.database import SessionLocal, get_db
 from app.limiter import limiter
 from app.routers import auth as auth_router, chat as chat_router, properties as properties_router, conversations as conversations_router, admin_properties as admin_properties_router, admin_users as admin_users_router, sellers as sellers_router
+from app.services.digest_service import run_listing_digests
+
+logger = logging.getLogger(__name__)
+
+# Daily listing-digest run time. A plain in-process loop rather than an
+# external cron — no extra infra to run this app anywhere, and double
+# firing across replicas isn't a concern at this project's scale.
+DIGEST_HOUR_UTC = 9
+
+
+def _seconds_until_next_digest_run() -> float:
+    now = datetime.now(timezone.utc)
+    run_at = now.replace(hour=DIGEST_HOUR_UTC, minute=0, second=0, microsecond=0)
+    if run_at <= now:
+        run_at += timedelta(days=1)
+    return (run_at - now).total_seconds()
+
+
+async def _digest_loop():
+    while True:
+        await asyncio.sleep(_seconds_until_next_digest_run())
+        try:
+            with SessionLocal() as db:
+                run_listing_digests(db)
+        except Exception:
+            logger.exception("Listing digest run failed")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    task = asyncio.create_task(_digest_loop())
+    logger.info("Digest scheduler started (next run in %.0fs)", _seconds_until_next_digest_run())
+    yield
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
 
 app = FastAPI(
     title="DarSyria API",
     description="Backend for the DarSyria real estate platform",
-    version="0.1.0"
+    version="0.1.0",
+    lifespan=lifespan,
 )
 
 app.state.limiter = limiter

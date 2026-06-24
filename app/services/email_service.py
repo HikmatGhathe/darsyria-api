@@ -449,3 +449,172 @@ def send_rejection_notification(
         result.get("id") if isinstance(result, dict) else "?",
         locale,
     )
+
+
+# ---------------------------------------------------------------------------
+# New-listings digest email (followed sellers)
+# ---------------------------------------------------------------------------
+
+DIGEST_SUBJECTS = {
+    "en": "New listings from sellers you follow",
+    "de": "Neue Inserate von Verkäufern, denen Sie folgen",
+    "ar": "إعلانات جديدة من البائعين الذين تتابعهم",
+}
+
+
+def _digest_sections_html(locale: str, sections: list[dict]) -> str:
+    is_rtl = locale == "ar"
+    border_side = "right" if is_rtl else "left"
+    more_label = {
+        "en": "+{n} more",
+        "de": "+{n} weitere",
+        "ar": "+{n} أخرى",
+    }[locale]
+
+    blocks = []
+    for section in sections:
+        items = "".join(
+            f"""<div style="padding:10px 0;border-top:1px solid #eeeeee;">
+                  <a href="{listing['url']}" style="font-size:14px;font-weight:600;color:#111111;text-decoration:none;">{listing['title']}</a>
+                  <p style="font-size:13px;color:#888888;margin:2px 0 0 0;">{listing['location']} · {listing['price']}</p>
+                </div>"""
+            for listing in section["listings"]
+        )
+        more = (
+            f"""<p style="font-size:12px;color:#888888;margin:8px 0 0 0;">{more_label.format(n=section['more_count'])}</p>"""
+            if section["more_count"] > 0
+            else ""
+        )
+        blocks.append(f"""
+          <div style="margin:0 0 20px 0;border-{border_side}:3px solid #2563eb;padding:4px 16px;">
+            <h2 style="font-size:15px;font-weight:600;margin:0 0 4px 0;color:#111111;">{section['seller_name']}</h2>
+            {items}
+            {more}
+          </div>""")
+    return "".join(blocks)
+
+
+def _digest_html(locale: str, sections: list[dict], frontend_url: str) -> str:
+    is_rtl = locale == "ar"
+    dir_attr = "rtl" if is_rtl else "ltr"
+    text_align = "right" if is_rtl else "left"
+
+    copy = {
+        "en": {
+            "heading": "New listings from sellers you follow",
+            "button": "Browse all listings",
+            "footer": "You're receiving this because you follow one or more sellers on DarSyria. Unfollow anytime from their profile.",
+            "signature": "— The DarSyria team",
+        },
+        "de": {
+            "heading": "Neue Inserate von Verkäufern, denen Sie folgen",
+            "button": "Alle Inserate ansehen",
+            "footer": "Sie erhalten diese E-Mail, weil Sie einem oder mehreren Verkäufern auf DarSyria folgen. Sie können das Folgen jederzeit über das Profil beenden.",
+            "signature": "— Das DarSyria-Team",
+        },
+        "ar": {
+            "heading": "إعلانات جديدة من البائعين الذين تتابعهم",
+            "button": "تصفح جميع الإعلانات",
+            "footer": "تستلم هذه الرسالة لأنك تتابع بائعًا واحدًا أو أكثر على دار سوريا. يمكنك إلغاء المتابعة في أي وقت من صفحة ملفهم.",
+            "signature": "— فريق دار سوريا",
+        },
+    }
+    c = copy.get(locale, copy["en"])
+
+    return f"""<!DOCTYPE html>
+<html dir="{dir_attr}" lang="{locale}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="margin:0;padding:0;background-color:#f6f6f6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f6f6f6;padding:40px 20px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;background-color:#ffffff;border-radius:8px;border:1px solid #e5e5e5;overflow:hidden;">
+          <tr>
+            <td style="padding:32px;text-align:{text_align};color:#111111;">
+              <h1 style="font-size:20px;font-weight:600;margin:0 0 20px 0;color:#111111;">{c['heading']}</h1>
+              {_digest_sections_html(locale, sections)}
+              <table role="presentation" cellpadding="0" cellspacing="0" style="margin-top:8px;">
+                <tr>
+                  <td style="background-color:#2563eb;border-radius:6px;">
+                    <a href="{frontend_url}/{locale}/properties" style="display:inline-block;padding:12px 24px;color:#ffffff;text-decoration:none;font-size:15px;font-weight:500;">{c['button']}</a>
+                  </td>
+                </tr>
+              </table>
+              <hr style="border:none;border-top:1px solid #e5e5e5;margin:32px 0 16px 0;">
+              <p style="font-size:12px;line-height:1.5;margin:0 0 8px 0;color:#888888;">{c['footer']}</p>
+              <p style="font-size:12px;line-height:1.5;margin:0;color:#888888;">{c['signature']}</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>"""
+
+
+def _digest_text(locale: str, sections: list[dict], frontend_url: str) -> str:
+    """Plain-text version for clients that don't render HTML."""
+    more_label = {
+        "en": "+{n} more",
+        "de": "+{n} weitere",
+        "ar": "+{n} أخرى",
+    }[locale]
+
+    lines = []
+    for section in sections:
+        lines.append(f"\n{section['seller_name']}")
+        for listing in section["listings"]:
+            lines.append(f"  - {listing['title']} ({listing['location']}, {listing['price']})\n    {listing['url']}")
+        if section["more_count"] > 0:
+            lines.append(f"  {more_label.format(n=section['more_count'])}")
+
+    body = "\n".join(lines)
+    browse_url = f"{frontend_url}/{locale}/properties"
+
+    if locale == "de":
+        return f"Neue Inserate von Verkäufern, denen Sie folgen\n{body}\n\nAlle Inserate ansehen:\n{browse_url}\n\n— Das DarSyria-Team"
+    if locale == "ar":
+        return f"إعلانات جديدة من البائعين الذين تتابعهم\n{body}\n\nتصفح جميع الإعلانات:\n{browse_url}\n\n— فريق دار سوريا"
+    return f"New listings from sellers you follow\n{body}\n\nBrowse all listings:\n{browse_url}\n\n— The DarSyria team"
+
+
+def send_new_listings_digest(
+    to_email: str,
+    sections: list[dict],
+    locale: str = "en",
+) -> None:
+    """
+    Send a digest email covering new listings across every seller the
+    recipient follows. `sections` is a list of dicts:
+        {"seller_name": str, "listings": [{"title", "url", "location", "price"}, ...], "more_count": int}
+
+    Raises EmailError if Resend rejects the send.
+    """
+    if locale not in DIGEST_SUBJECTS:
+        locale = "en"
+
+    from_address = f"{settings.email_from_name} <{settings.email_from}>"
+
+    try:
+        result = resend.Emails.send({
+            "from": from_address,
+            "to": to_email,
+            "subject": DIGEST_SUBJECTS[locale],
+            "html": _digest_html(locale, sections, settings.frontend_url),
+            "text": _digest_text(locale, sections, settings.frontend_url),
+        })
+    except Exception as e:
+        logger.exception("Resend send failed for listings digest to %s", to_email)
+        raise EmailError(f"Could not send digest email: {e}") from e
+
+    logger.info(
+        "Listings digest sent to %s (resend_id=%s, locale=%s, sections=%d)",
+        to_email,
+        result.get("id") if isinstance(result, dict) else "?",
+        locale,
+        len(sections),
+    )
