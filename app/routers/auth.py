@@ -1,7 +1,9 @@
 import logging
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -9,6 +11,8 @@ from app.cookies import REFRESH_TOKEN_COOKIE, clear_auth_cookies, set_auth_cooki
 from app.database import get_db
 from app.dependencies import get_current_user
 from app.limiter import limiter
+from app.models.conversation import Conversation
+from app.models.property import Property
 from app.models.user import User
 from app.schemas.auth import (
     AuthResponse,
@@ -19,6 +23,7 @@ from app.schemas.auth import (
     UserUpdate,
 )
 from app.services.auth_service import (
+    anonymize_and_delete_account,
     create_access_token,
     create_magic_link_token,
     create_refresh_token,
@@ -200,6 +205,87 @@ def update_me(
         list(updates.keys()),
     )
     return current_user
+
+
+@router.get("/me/export")
+def export_my_data(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    GDPR Article 20 (right to data portability): a JSON dump of this
+    user's own profile, listings, and conversations (including the
+    other party's messages within those conversations, since this user
+    was a legitimate recipient of them).
+    """
+    properties = db.query(Property).filter(Property.owner_id == current_user.id).all()
+
+    conversations = (
+        db.query(Conversation)
+        .filter(or_(Conversation.buyer_id == current_user.id, Conversation.seller_id == current_user.id))
+        .all()
+    )
+
+    return {
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "profile": {
+            "id": str(current_user.id),
+            "email": current_user.email,
+            "full_name": current_user.full_name,
+            "phone": current_user.phone,
+            "locale": current_user.locale,
+            "created_at": current_user.created_at.isoformat(),
+            "last_login_at": current_user.last_login_at.isoformat() if current_user.last_login_at else None,
+        },
+        "properties": [
+            {
+                "id": str(p.id),
+                "title": p.title,
+                "city": p.city,
+                "price_amount": str(p.price_amount),
+                "price_currency": p.price_currency,
+                "status": p.status,
+                "created_at": p.created_at.isoformat(),
+            }
+            for p in properties
+        ],
+        "conversations": [
+            {
+                "id": str(c.id),
+                "property_id": str(c.property_id),
+                "role": "buyer" if c.buyer_id == current_user.id else "seller",
+                "created_at": c.created_at.isoformat(),
+                "messages": [
+                    {
+                        "sender_id": str(m.sender_id),
+                        "sent_by_me": m.sender_id == current_user.id,
+                        "body": m.body,
+                        "created_at": m.created_at.isoformat(),
+                    }
+                    for m in c.messages
+                ],
+            }
+            for c in conversations
+        ],
+    }
+
+
+@router.delete("/me", response_model=GenericMessage)
+def delete_my_account(
+    response: Response,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Self-service account deletion (GDPR right to erasure). Anonymizes the
+    user's personal data and unpublishes their listings rather than hard
+    deleting the row, so other users' conversations with them stay intact.
+    """
+    anonymize_and_delete_account(db, current_user)
+    clear_auth_cookies(response)
+
+    logger.info("User %s deleted their account", current_user.id)
+    return GenericMessage(message="Account deleted")
 
 
 @router.post("/logout", response_model=GenericMessage)

@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.models.magic_link_token import MagicLinkToken
+from app.models.property import Property
 from app.models.refresh_token import RefreshToken
 from app.models.user import User
 
@@ -213,3 +214,41 @@ def revoke_refresh_token(db: Session, raw_token: str) -> None:
     if db_token and db_token.revoked_at is None:
         db_token.revoked_at = datetime.now(timezone.utc)
         db.commit()
+
+
+def revoke_all_refresh_tokens(db: Session, user_id: UUID) -> None:
+    """Revoke every active refresh token for a user (e.g. on account deletion)."""
+    now = datetime.now(timezone.utc)
+    db.query(RefreshToken).filter(
+        RefreshToken.user_id == user_id,
+        RefreshToken.revoked_at.is_(None),
+    ).update({"revoked_at": now}, synchronize_session=False)
+    db.commit()
+
+
+# ----- Account deletion (GDPR erasure request) -----
+
+def anonymize_and_delete_account(db: Session, user: User) -> None:
+    """
+    Self-service account deletion. The row is kept (not hard-deleted) so
+    conversations/messages other users have with this person stay intact —
+    we blank the personal fields instead and unpublish their listings.
+    """
+    now = datetime.now(timezone.utc)
+
+    db.query(Property).filter(Property.owner_id == user.id).update(
+        {"status": "removed"}, synchronize_session=False
+    )
+
+    user.email = f"deleted-{user.id}@deleted.darsyria.local"
+    user.full_name = None
+    user.phone = None
+    user.is_active = False
+    user.is_admin = False
+    user.oauth_provider = None
+    user.oauth_subject = None
+    user.deleted_at = now
+
+    db.commit()
+
+    revoke_all_refresh_tokens(db, user.id)

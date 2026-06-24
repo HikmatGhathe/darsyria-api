@@ -77,6 +77,8 @@ def _get_user_display_name(user: User) -> Optional[str]:
     For now we just use name (we may add a `display_name` field later).
     Returns None if no name available — frontend shows "User" placeholder.
     """
+    if user.deleted_at is not None:
+        return None
     if user.full_name:
         return user.full_name
     # Fall back to the local part of the email, never the full email
