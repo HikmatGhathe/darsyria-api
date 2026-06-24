@@ -44,6 +44,12 @@ services:
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
     container_name: darsyria-frontend
     restart: unless-stopped
+    environment:
+      # Server-side reads (server components, sitemap, metadata) — the API is
+      # reachable by compose service name, not localhost, inside the network.
+      INTERNAL_API_URL: http://api:8000
+      # Absolute public origin, used server-side for canonical/OG/sitemap URLs.
+      NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL:-http://localhost:3000}
     ports:
       - "3000:3000"
     depends_on:
