@@ -1,6 +1,6 @@
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
@@ -35,11 +35,36 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
+def _send_magic_link_email(to_email: str, magic_link_url: str, locale: str) -> None:
+    """
+    Try to send the magic-link email. If it fails, log the link as a
+    fallback so the user can still complete sign-in during development.
+    Runs as a background task — must not raise, since there's no request
+    left to return an error response to.
+    """
+    try:
+        send_magic_link(to_email=to_email, magic_link_url=magic_link_url, locale=locale)
+        logger.info("Magic link email sent to %s", to_email)
+    except EmailError as e:
+        logger.error(
+            "Email send failed for %s — falling back to terminal: %s",
+            to_email,
+            e,
+        )
+        logger.warning("=" * 70)
+        logger.warning("MAGIC LINK (email failed - fallback to terminal)")
+        logger.warning("To:    %s", to_email)
+        logger.warning("Link:  %s", magic_link_url)
+        logger.warning("Expires in %d minutes", settings.magic_link_expiration_minutes)
+        logger.warning("=" * 70)
+
+
 @router.post("/magic-link/request", response_model=GenericMessage)
 @limiter.limit("5/hour")
 def request_magic_link(
     payload: MagicLinkRequest,
     request: Request,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
     """
@@ -61,27 +86,14 @@ def request_magic_link(
         f"?token={raw_token}"
     )
 
-    # Try to send via email. If it fails, log the link as a fallback
-    # so the user can still complete sign-in during development.
-    try:
-        send_magic_link(
-            to_email=payload.email,
-            magic_link_url=magic_link,
-            locale=payload.locale,
-        )
-        logger.info("Magic link email sent to %s", payload.email)
-    except EmailError as e:
-        logger.error(
-            "Email send failed for %s — falling back to terminal: %s",
-            payload.email,
-            e,
-        )
-        logger.warning("=" * 70)
-        logger.warning("MAGIC LINK (email failed - fallback to terminal)")
-        logger.warning("To:    %s", payload.email)
-        logger.warning("Link:  %s", magic_link)
-        logger.warning("Expires in %d minutes", settings.magic_link_expiration_minutes)
-        logger.warning("=" * 70)
+    # Send in the background so a slow/down email provider doesn't block
+    # the response — the endpoint always returns success immediately.
+    background_tasks.add_task(
+        _send_magic_link_email,
+        to_email=payload.email,
+        magic_link_url=magic_link,
+        locale=payload.locale,
+    )
 
     return GenericMessage(message="If the email is valid, a login link has been sent.")
 

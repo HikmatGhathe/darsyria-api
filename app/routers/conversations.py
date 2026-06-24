@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy import select, or_, and_, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -42,6 +42,33 @@ def _truncate(text: str, limit: int = PREVIEW_LENGTH) -> str:
     if len(text) <= limit:
         return text
     return text[: limit - 1].rstrip() + "…"
+
+
+def _send_message_notification_email(
+    to_email: str,
+    sender_name: str,
+    property_title: str,
+    message_preview: str,
+    conversation_url: str,
+    locale: str,
+    conversation_id: UUID,
+) -> None:
+    """Runs as a background task — must not raise, non-fatal on failure."""
+    try:
+        send_message_notification(
+            to_email=to_email,
+            sender_name=sender_name,
+            property_title=property_title,
+            message_preview=message_preview,
+            conversation_url=conversation_url,
+            locale=locale,
+        )
+    except EmailError as e:
+        logger.error(
+            "Email notification failed for conversation %s: %s",
+            conversation_id,
+            e,
+        )
 
 
 def _get_user_display_name(user: User) -> Optional[str]:
@@ -345,6 +372,7 @@ def get_conversation(
 def send_message(
     conversation_id: UUID,
     payload: MessageCreate,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -427,23 +455,23 @@ def send_message(
         message_preview = msg.body if len(msg.body) <= 200 else msg.body[:199].rstrip() + "…"
 
         if recipient and recipient.email:
-            try:
-                send_message_notification(
-                    to_email=recipient.email,
-                    sender_name=sender_name,
-                    property_title=property_title,
-                    message_preview=message_preview,
-                    conversation_url=conversation_url,
-                    locale=recipient_locale,
-                )
-                conv.last_notification_at = datetime.now(timezone.utc)
-                db.commit()
-            except EmailError as e:
-                logger.error(
-                    "Email notification failed for conversation %s: %s",
-                    conv.id,
-                    e,
-                )
+            # Stamp the debounce timestamp now, synchronously — it tracks
+            # notification *attempts* (to rate-limit how often we email),
+            # not delivery confirmation, so it doesn't need to wait on the
+            # background send below.
+            conv.last_notification_at = datetime.now(timezone.utc)
+            db.commit()
+
+            background_tasks.add_task(
+                _send_message_notification_email,
+                to_email=recipient.email,
+                sender_name=sender_name,
+                property_title=property_title,
+                message_preview=message_preview,
+                conversation_url=conversation_url,
+                locale=recipient_locale,
+                conversation_id=conv.id,
+            )
 
     return msg
 

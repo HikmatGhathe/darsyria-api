@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status, Query
 from sqlalchemy import select, or_
 from sqlalchemy.orm import Session
 
@@ -34,6 +34,30 @@ def _get_property_or_404(db: Session, property_id: UUID) -> Property:
     if prop is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Property not found")
     return prop
+
+
+def _send_rejection_email(
+    to_email: str,
+    property_title: str,
+    reason: str,
+    locale: str,
+    owner_id: UUID,
+    property_id: UUID,
+) -> None:
+    """Runs as a background task — must not raise, non-fatal on failure."""
+    try:
+        send_rejection_notification(
+            to_email=to_email,
+            property_title=property_title,
+            reason=reason,
+            locale=locale,
+        )
+    except EmailError:
+        logger.warning(
+            "Could not send rejection email to owner %s for property %s",
+            owner_id,
+            property_id,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -137,6 +161,7 @@ def admin_approve_property(
 def admin_reject_property(
     property_id: UUID,
     body: PropertyRejectRequest,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     admin: User = Depends(get_current_admin),
 ):
@@ -161,22 +186,18 @@ def admin_reject_property(
 
     logger.info("Admin %s rejected property %s: %s", admin.id, property_id, body.reason[:80])
 
-    # Send email notification to owner — non-blocking failure
+    # Send email notification to owner in the background — doesn't block the response
     owner = db.get(User, prop.owner_id)
     if owner:
-        try:
-            send_rejection_notification(
-                to_email=owner.email,
-                property_title=prop.title,
-                reason=body.reason,
-                locale=getattr(owner, "locale", "en") or "en",
-            )
-        except EmailError:
-            logger.warning(
-                "Could not send rejection email to owner %s for property %s",
-                owner.id,
-                property_id,
-            )
+        background_tasks.add_task(
+            _send_rejection_email,
+            to_email=owner.email,
+            property_title=prop.title,
+            reason=body.reason,
+            locale=getattr(owner, "locale", "en") or "en",
+            owner_id=owner.id,
+            property_id=property_id,
+        )
 
     return prop
 
