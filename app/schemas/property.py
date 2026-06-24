@@ -63,6 +63,9 @@ class PropertyOut(BaseModel):
     created_at: datetime
     updated_at: datetime
     images: list[PropertyImageOut] = []
+    seller_display_name: Optional[str] = None
+    seller_account_type: Optional[str] = None
+    seller_verification_status: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -70,6 +73,7 @@ class PropertyOut(BaseModel):
 # Lightweight version for list endpoints (less data over the wire)
 class PropertyListItem(BaseModel):
     id: UUID
+    owner_id: UUID
     title: str
     city: str
     neighborhood: Optional[str]
@@ -81,6 +85,9 @@ class PropertyListItem(BaseModel):
     document_status: str
     created_at: datetime
     cover_image_url: Optional[str] = None
+    seller_display_name: Optional[str] = None
+    seller_account_type: Optional[str] = None
+    seller_verification_status: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 

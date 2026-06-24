@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID
 
@@ -19,6 +20,7 @@ from app.schemas.property import (
     PropertyImageOut,
 )
 from app.services.r2_storage import upload_property_image, delete_object, delete_property_images, StorageError
+from app.services.seller_helpers import seller_display_name
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/properties", tags=["properties"])
@@ -71,14 +73,19 @@ def list_properties(
     min_price: Optional[float] = Query(default=None, ge=0),
     max_price: Optional[float] = Query(default=None, ge=0),
     rooms: Optional[int] = Query(default=None, ge=0, le=50),
+    seller: Optional[str] = Query(default=None, max_length=200),
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
 ):
     """
     Public listing browser. Only returns 'active' status.
-    Filters: city, property_type, price range, rooms.
+    Filters: city, property_type, price range, rooms, seller/company name.
     """
-    stmt = select(Property).where(Property.status == "active")
+    stmt = (
+        select(Property, User)
+        .join(User, Property.owner_id == User.id)
+        .where(Property.status == "active")
+    )
 
     if city:
         stmt = stmt.where(Property.city.ilike(f"%{city}%"))
@@ -90,20 +97,28 @@ def list_properties(
         stmt = stmt.where(Property.price_amount <= max_price)
     if rooms is not None:
         stmt = stmt.where(Property.rooms == rooms)
+    if seller:
+        like = f"%{seller}%"
+        stmt = stmt.where(
+            (User.company_name.ilike(like)) | (User.full_name.ilike(like))
+        )
 
     stmt = stmt.order_by(Property.created_at.desc()).limit(limit).offset(offset)
 
-    results = db.execute(stmt).scalars().all()
+    results = db.execute(stmt).all()
 
-    # Attach cover image URL (position=0) for each property
+    # Attach cover image URL (position=0) and seller info for each property
     items = []
-    for prop in results:
+    for prop, owner in results:
         cover = db.execute(
             select(PropertyImage)
             .where(PropertyImage.property_id == prop.id, PropertyImage.position == 0)
         ).scalar_one_or_none()
         item = PropertyListItem.model_validate(prop)
         item.cover_image_url = cover.public_url if cover else None
+        item.seller_display_name = seller_display_name(owner)
+        item.seller_account_type = owner.account_type
+        item.seller_verification_status = owner.verification_status
         items.append(item)
 
     return items
@@ -133,8 +148,14 @@ def get_property(
         .order_by(PropertyImage.position)
     ).scalars().all()
 
+    owner = db.get(User, prop.owner_id)
+
     out = PropertyOut.model_validate(prop)
     out.images = [PropertyImageOut.model_validate(img) for img in images]
+    if owner:
+        out.seller_display_name = seller_display_name(owner)
+        out.seller_account_type = owner.account_type
+        out.seller_verification_status = owner.verification_status
     return out
 
 
@@ -158,6 +179,8 @@ def publish_property(
         )
 
     prop.status = "active"
+    if prop.published_at is None:
+        prop.published_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(prop)
 
