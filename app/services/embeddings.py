@@ -7,7 +7,15 @@ call. For E5-family models, retrieval quality depends on using "query:" and
 """
 
 import logging
+import os
 from typing import Literal
+
+# Must be set before fastembed/huggingface_hub is imported. On Windows,
+# creating the cache's symlinks requires Developer Mode or admin rights;
+# without it, huggingface_hub's symlink-then-fallback path leaves the
+# cache inconsistently populated (different files missing on different
+# runs). Forcing real file copies avoids the symlink step entirely.
+os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS", "1")
 
 from fastembed import TextEmbedding
 
