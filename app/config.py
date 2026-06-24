@@ -20,6 +20,13 @@ class Settings(BaseSettings):
     magic_link_expiration_minutes: int = 15
     frontend_url: str = "http://localhost:3000"
 
+    # CORS — comma-separated list of allowed origins
+    allowed_origins: str = "http://localhost:3000"
+
+    @property
+    def cors_allowed_origins(self) -> list[str]:
+        return [origin.strip() for origin in self.allowed_origins.split(",") if origin.strip()]
+
     # Ollama
     ollama_api_url: str = ""
     ollama_api_key: str = ""

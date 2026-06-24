@@ -1,11 +1,12 @@
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.dependencies import get_optional_user
+from app.limiter import limiter
 from app.models.chat_message import ChatMessage
 from app.models.user import User
 from app.schemas.chat import ChatRequest, ChatResponse
@@ -17,7 +18,9 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 
 
 @router.post("", response_model=ChatResponse)
+@limiter.limit("15/hour")
 async def post_chat(
+    request: Request,
     payload: ChatRequest,
     db: Session = Depends(get_db),
     current_user: Optional[User] = Depends(get_optional_user),

@@ -16,3 +16,4 @@ pgvector==0.3.6
 boto3==1.43.13
 Pillow==10.4.0
 resend==2.30.1
+slowapi==0.1.10

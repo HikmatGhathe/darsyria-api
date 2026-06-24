@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.database import get_db
 from app.dependencies import get_current_user
+from app.limiter import limiter
 from app.models.user import User
 from app.schemas.auth import (
     AuthResponse,
@@ -35,6 +36,7 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 
 @router.post("/magic-link/request", response_model=GenericMessage)
+@limiter.limit("5/hour")
 def request_magic_link(
     payload: MagicLinkRequest,
     request: Request,
