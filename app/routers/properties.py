@@ -44,8 +44,11 @@ def create_property(
         owner_id=current_user.id,
         title=payload.title,
         description=payload.description,
+        governorate=payload.governorate,
         city=payload.city,
         neighborhood=payload.neighborhood,
+        latitude=payload.latitude,
+        longitude=payload.longitude,
         price_amount=payload.price_amount,
         price_currency=payload.price_currency,
         property_type=payload.property_type,
@@ -74,6 +77,7 @@ _PROPERTY_SORTS = {
 @router.get("", response_model=list[PropertyListItem])
 def list_properties(
     db: Session = Depends(get_db),
+    governorate: Optional[str] = Query(default=None, max_length=40),
     city: Optional[str] = Query(default=None, max_length=100),
     property_type: Optional[str] = Query(
         default=None,
@@ -107,6 +111,7 @@ def list_properties(
     )
     stmt = apply_property_filters(
         stmt,
+        governorate=governorate,
         city=city,
         property_type=property_type,
         min_price=min_price,
@@ -133,6 +138,7 @@ def list_properties(
 @router.get("/count")
 def count_properties(
     db: Session = Depends(get_db),
+    governorate: Optional[str] = Query(default=None, max_length=40),
     city: Optional[str] = Query(default=None, max_length=100),
     property_type: Optional[str] = Query(
         default=None,
@@ -148,6 +154,7 @@ def count_properties(
     stmt = select(func.count(Property.id)).join(User, Property.owner_id == User.id)
     stmt = apply_property_filters(
         stmt,
+        governorate=governorate,
         city=city,
         property_type=property_type,
         min_price=min_price,

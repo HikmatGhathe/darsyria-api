@@ -32,11 +32,16 @@ class Property(Base):
     title = Column(String(200), nullable=False)
     description = Column(Text, nullable=False)
 
-    # Location — for v1 we store as plain text fields, not geolocation.
-    # Country is restricted to "SY" for now; future versions may expand.
+    # Location. Country is restricted to "SY" for now. city/neighborhood are
+    # free text; governorate is a structured key (one of Syria's 14) added
+    # later, nullable so existing rows are unaffected. latitude/longitude are
+    # an optional seller-dropped map pin.
     country = Column(String(2), nullable=False, default="SY")
+    governorate = Column(String(40), nullable=True)       # e.g. "damascus", "aleppo"
     city = Column(String(100), nullable=False)            # e.g. "Damascus"
     neighborhood = Column(String(150), nullable=True)     # e.g. "Mezzeh"
+    latitude = Column(Numeric(9, 6), nullable=True)
+    longitude = Column(Numeric(9, 6), nullable=True)
 
     # Price as decimal — kept in USD for v1 because SYP is unstable.
     # Currency stored separately so we can extend later.

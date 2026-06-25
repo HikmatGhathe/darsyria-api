@@ -7,6 +7,7 @@ from app.models.user import User
 def apply_property_filters(
     stmt,
     *,
+    governorate: Optional[str] = None,
     city: Optional[str] = None,
     property_type: Optional[str] = None,
     min_price=None,
@@ -21,6 +22,8 @@ def apply_property_filters(
     matching in the daily digest.
     """
     stmt = stmt.where(Property.status == "active")
+    if governorate:
+        stmt = stmt.where(Property.governorate == governorate)
     if city:
         stmt = stmt.where(Property.city.ilike(f"%{city}%"))
     if property_type:
