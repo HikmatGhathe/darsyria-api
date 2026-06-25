@@ -174,11 +174,21 @@ Already wired; enable by setting DSNs:
 - [ ] Confirm the privacy policy names Resend, Cloudflare R2, Google, and
       Sentry as processors if you enable them.
 - [ ] 🔴 **Verification documents** (deeds/IDs/licenses) are sensitive personal
-      data. Create a **separate R2 bucket without public access** and set
-      `R2_PRIVATE_BUCKET_NAME` to it. Otherwise documents live in the main
-      (public-domain) bucket and are reachable if an object key leaks — not
-      appropriate for GDPR personal data. Admins always read them via
-      short-lived presigned URLs regardless.
+      data and must live in a **private** R2 bucket. Otherwise they sit in the
+      main (public-domain) bucket and are reachable if an object key leaks — not
+      appropriate for GDPR personal data. Steps:
+      1. Cloudflare dashboard → R2 → **Create bucket**, e.g. `darsyria-verification`.
+      2. On that bucket: **do NOT** enable public access — no "Public
+         Development URL" (`r2.dev`), no custom public domain. Leave it private.
+      3. Make sure your R2 API credentials (`R2_ACCESS_KEY_ID` /
+         `R2_SECRET_ACCESS_KEY`) can read+write this bucket. If your token is
+         scoped to a single bucket, create/repoint a token covering **both** the
+         images bucket and this one. `R2_ENDPOINT_URL` is unchanged (account-level).
+      4. Set `R2_PRIVATE_BUCKET_NAME=darsyria-verification` in the API `.env` and
+         restart the API.
+      5. Verify: upload a document, confirm an admin can open it (presigned URL
+         loads), and that it is **not** served from the public `*.r2.dev` images
+         domain. Admins always read via short-lived presigned URLs regardless.
 
 ---
 
