@@ -173,6 +173,12 @@ Already wired; enable by setting DSNs:
 - [ ] Cookie notice renders.
 - [ ] Confirm the privacy policy names Resend, Cloudflare R2, Google, and
       Sentry as processors if you enable them.
+- [ ] 🔴 **Verification documents** (deeds/IDs/licenses) are sensitive personal
+      data. Create a **separate R2 bucket without public access** and set
+      `R2_PRIVATE_BUCKET_NAME` to it. Otherwise documents live in the main
+      (public-domain) bucket and are reachable if an object key leaks — not
+      appropriate for GDPR personal data. Admins always read them via
+      short-lived presigned URLs regardless.
 
 ---
 

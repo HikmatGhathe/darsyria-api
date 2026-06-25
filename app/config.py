@@ -56,6 +56,11 @@ class Settings(BaseSettings):
     r2_bucket_name: str
     r2_endpoint_url: str
     r2_public_url: str
+    # Optional separate, NON-public bucket for sensitive verification documents
+    # (deeds, IDs, business licenses). Strongly recommended in production so
+    # these are never reachable via the public bucket domain. Falls back to the
+    # main bucket when empty (documents then rely on unguessable keys only).
+    r2_private_bucket_name: str = ""
 
     # Resend email service
     resend_api_key: str

@@ -38,6 +38,12 @@ class StorageError(Exception):
     """Raised when an R2 operation fails."""
 
 
+def _doc_bucket() -> str:
+    """Bucket for verification documents: the private one if configured, else
+    the main bucket (relying on unguessable keys — see config note)."""
+    return settings.r2_private_bucket_name or settings.r2_bucket_name
+
+
 def _get_client():
     """Build a boto3 S3 client configured for R2."""
     return boto3.client(
@@ -198,7 +204,7 @@ def upload_verification_document(
     client = _get_client()
     try:
         client.put_object(
-            Bucket=settings.r2_bucket_name,
+            Bucket=_doc_bucket(),
             Key=storage_key,
             Body=body,
             ContentType=ct,
@@ -222,7 +228,7 @@ def generate_presigned_url(storage_key: str, expires_in: int = 300) -> str:
     try:
         return client.generate_presigned_url(
             "get_object",
-            Params={"Bucket": settings.r2_bucket_name, "Key": storage_key},
+            Params={"Bucket": _doc_bucket(), "Key": storage_key},
             ExpiresIn=expires_in,
         )
     except Exception as e:
