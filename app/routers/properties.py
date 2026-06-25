@@ -4,7 +4,7 @@ from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, status
-from sqlalchemy import and_, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -62,40 +62,20 @@ def create_property(
     return prop
 
 
-@router.get("", response_model=list[PropertyListItem])
-def list_properties(
-    db: Session = Depends(get_db),
-    city: Optional[str] = Query(default=None, max_length=100),
-    property_type: Optional[str] = Query(
-        default=None,
-        pattern="^(apartment|house|land|commercial)$",
-    ),
-    min_price: Optional[float] = Query(default=None, ge=0),
-    max_price: Optional[float] = Query(default=None, ge=0),
-    rooms: Optional[int] = Query(default=None, ge=0, le=50),
-    seller: Optional[str] = Query(default=None, max_length=200),
-    limit: int = Query(default=20, ge=1, le=100),
-    offset: int = Query(default=0, ge=0),
+# Active-only filter clauses shared by the list endpoint, the count endpoint,
+# and saved-search matching. Any statement passed in must already join User
+# (the seller filter references User columns).
+def _apply_property_filters(
+    stmt,
+    *,
+    city: Optional[str] = None,
+    property_type: Optional[str] = None,
+    min_price: Optional[float] = None,
+    max_price: Optional[float] = None,
+    rooms: Optional[int] = None,
+    seller: Optional[str] = None,
 ):
-    """
-    Public listing browser. Only returns 'active' status.
-    Filters: city, property_type, price range, rooms, seller/company name.
-    """
-    # Cover image (position 0) is joined in the same query — one query for
-    # the whole page instead of one extra lookup per listing.
-    stmt = (
-        select(Property, User, PropertyImage)
-        .join(User, Property.owner_id == User.id)
-        .outerjoin(
-            PropertyImage,
-            and_(
-                PropertyImage.property_id == Property.id,
-                PropertyImage.position == 0,
-            ),
-        )
-        .where(Property.status == "active")
-    )
-
+    stmt = stmt.where(Property.status == "active")
     if city:
         stmt = stmt.where(Property.city.ilike(f"%{city}%"))
     if property_type:
@@ -111,8 +91,61 @@ def list_properties(
         stmt = stmt.where(
             (User.company_name.ilike(like)) | (User.full_name.ilike(like))
         )
+    return stmt
 
-    stmt = stmt.order_by(Property.created_at.desc()).limit(limit).offset(offset)
+
+_PROPERTY_SORTS = {
+    "newest": (Property.created_at.desc(),),
+    "oldest": (Property.created_at.asc(),),
+    "price_asc": (Property.price_amount.asc(), Property.created_at.desc()),
+    "price_desc": (Property.price_amount.desc(), Property.created_at.desc()),
+}
+
+
+@router.get("", response_model=list[PropertyListItem])
+def list_properties(
+    db: Session = Depends(get_db),
+    city: Optional[str] = Query(default=None, max_length=100),
+    property_type: Optional[str] = Query(
+        default=None,
+        pattern="^(apartment|house|land|commercial)$",
+    ),
+    min_price: Optional[float] = Query(default=None, ge=0),
+    max_price: Optional[float] = Query(default=None, ge=0),
+    rooms: Optional[int] = Query(default=None, ge=0, le=50),
+    seller: Optional[str] = Query(default=None, max_length=200),
+    sort: str = Query(default="newest", pattern="^(newest|oldest|price_asc|price_desc)$"),
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+):
+    """
+    Public listing browser. Only returns 'active' status.
+    Filters: city, property_type, price range, rooms, seller/company name.
+    Sort: newest (default), oldest, price_asc, price_desc.
+    """
+    # Cover image (position 0) is joined in the same query — one query for
+    # the whole page instead of one extra lookup per listing.
+    stmt = (
+        select(Property, User, PropertyImage)
+        .join(User, Property.owner_id == User.id)
+        .outerjoin(
+            PropertyImage,
+            and_(
+                PropertyImage.property_id == Property.id,
+                PropertyImage.position == 0,
+            ),
+        )
+    )
+    stmt = _apply_property_filters(
+        stmt,
+        city=city,
+        property_type=property_type,
+        min_price=min_price,
+        max_price=max_price,
+        rooms=rooms,
+        seller=seller,
+    )
+    stmt = stmt.order_by(*_PROPERTY_SORTS[sort]).limit(limit).offset(offset)
 
     results = db.execute(stmt).all()
 
@@ -126,6 +159,34 @@ def list_properties(
         items.append(item)
 
     return items
+
+
+@router.get("/count")
+def count_properties(
+    db: Session = Depends(get_db),
+    city: Optional[str] = Query(default=None, max_length=100),
+    property_type: Optional[str] = Query(
+        default=None,
+        pattern="^(apartment|house|land|commercial)$",
+    ),
+    min_price: Optional[float] = Query(default=None, ge=0),
+    max_price: Optional[float] = Query(default=None, ge=0),
+    rooms: Optional[int] = Query(default=None, ge=0, le=50),
+    seller: Optional[str] = Query(default=None, max_length=200),
+):
+    """Total active listings matching the same filters as the list endpoint
+    (used by the browse page for 'X results' and 'Page N of M')."""
+    stmt = select(func.count(Property.id)).join(User, Property.owner_id == User.id)
+    stmt = _apply_property_filters(
+        stmt,
+        city=city,
+        property_type=property_type,
+        min_price=min_price,
+        max_price=max_price,
+        rooms=rooms,
+        seller=seller,
+    )
+    return {"count": db.execute(stmt).scalar_one()}
 
 
 @router.get("/{property_id}", response_model=PropertyOut)
