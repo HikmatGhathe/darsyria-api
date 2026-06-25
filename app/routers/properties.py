@@ -200,6 +200,9 @@ def get_property(
         out.seller_display_name = seller_display_name(owner)
         out.seller_account_type = owner.account_type
         out.seller_verification_status = owner.verification_status
+    # The ownership-verification rejection reason is private to the owner.
+    if not current_user or prop.owner_id != current_user.id:
+        out.verification_rejection_reason = None
     return out
 
 

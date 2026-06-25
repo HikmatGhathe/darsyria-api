@@ -10,15 +10,22 @@ from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status, Query
-from sqlalchemy import select, or_
+from sqlalchemy import select, or_, func
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.dependencies import get_current_admin
 from app.models.property import Property
 from app.models.user import User
+from app.models.verification_document import VerificationDocument
 from app.schemas.property import PropertyRejectRequest, PropertyAdminListItem
+from app.schemas.verification import (
+    AdminListingVerificationItem,
+    AdminPresignedDocument,
+    RejectRequest,
+)
 from app.services.email_service import send_rejection_notification, EmailError
+from app.services.r2_storage import StorageError, generate_presigned_url
 
 logger = logging.getLogger(__name__)
 
@@ -249,4 +256,128 @@ def admin_unflag_property(
         db.refresh(prop)
         logger.info("Admin %s unflagged property %s", admin.id, property_id)
 
+    return prop
+
+
+# ---------------------------------------------------------------------------
+# Listing ownership verification (individual sellers)
+# ---------------------------------------------------------------------------
+
+@router.get("/verification/pending", response_model=list[AdminListingVerificationItem])
+def admin_list_pending_listing_verifications(
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    """Listings whose owner has submitted ownership documents awaiting review."""
+    props = db.execute(
+        select(Property)
+        .where(Property.verification_status == "pending")
+        .order_by(Property.updated_at.desc())
+    ).scalars().all()
+
+    items = []
+    for prop in props:
+        owner = db.get(User, prop.owner_id)
+        doc_count = db.execute(
+            select(func.count(VerificationDocument.id)).where(
+                VerificationDocument.property_id == prop.id,
+                VerificationDocument.kind == "listing_ownership",
+            )
+        ).scalar() or 0
+        submitted_at = db.execute(
+            select(func.max(VerificationDocument.created_at)).where(
+                VerificationDocument.property_id == prop.id,
+                VerificationDocument.kind == "listing_ownership",
+            )
+        ).scalar()
+        items.append(
+            AdminListingVerificationItem(
+                property_id=prop.id,
+                title=prop.title,
+                owner_id=prop.owner_id,
+                owner_email=owner.email if owner else "",
+                verification_status=prop.verification_status,
+                document_count=doc_count,
+                submitted_at=submitted_at,
+            )
+        )
+    return items
+
+
+@router.get(
+    "/{property_id}/verification/documents",
+    response_model=list[AdminPresignedDocument],
+)
+def admin_list_listing_verification_documents(
+    property_id: UUID,
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    """Presigned, short-lived URLs for a listing's ownership documents."""
+    _get_property_or_404(db, property_id)
+
+    docs = db.execute(
+        select(VerificationDocument)
+        .where(
+            VerificationDocument.property_id == property_id,
+            VerificationDocument.kind == "listing_ownership",
+        )
+        .order_by(VerificationDocument.created_at.desc())
+    ).scalars().all()
+
+    out = []
+    for d in docs:
+        try:
+            url = generate_presigned_url(d.storage_key)
+        except StorageError:
+            continue
+        out.append(
+            AdminPresignedDocument(
+                document_id=d.id,
+                original_filename=d.original_filename,
+                content_type=d.content_type,
+                size_bytes=d.size_bytes,
+                created_at=d.created_at,
+                url=url,
+            )
+        )
+    return out
+
+
+@router.post("/{property_id}/verification/approve", response_model=PropertyAdminListItem)
+def admin_approve_listing_verification(
+    property_id: UUID,
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    """Approve a listing's ownership verification → 'Ownership verified' badge."""
+    prop = _get_property_or_404(db, property_id)
+
+    prop.verification_status = "verified"
+    prop.verification_rejection_reason = None
+    prop.verification_reviewed_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(prop)
+
+    logger.info("Admin %s approved ownership verification for %s", admin.id, property_id)
+    return prop
+
+
+@router.post("/{property_id}/verification/reject", response_model=PropertyAdminListItem)
+def admin_reject_listing_verification(
+    property_id: UUID,
+    body: RejectRequest,
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    """Reject a listing's ownership verification, with a reason for the owner."""
+    prop = _get_property_or_404(db, property_id)
+
+    prop.verification_status = "rejected"
+    prop.verification_rejection_reason = body.reason
+    prop.verification_reviewed_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(prop)
+
+    logger.info("Admin %s rejected ownership verification for %s", admin.id, property_id)
     return prop

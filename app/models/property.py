@@ -66,6 +66,16 @@ class Property(Base):
     # Values: "claimed", "documents_provided", "none"
     document_status = Column(String(30), nullable=False, default="none")
 
+    # Admin-reviewed *ownership* verification for THIS listing (individual
+    # sellers only — a company's listings derive trust from the company's own
+    # User.verification_status instead). Trust badge only; never gates listing.
+    # Values: "unverified" | "pending" | "verified" | "rejected"
+    verification_status = Column(
+        String(20), nullable=False, default="unverified", server_default="unverified"
+    )
+    verification_reviewed_at = Column(DateTime(timezone=True), nullable=True)
+    verification_rejection_reason = Column(Text, nullable=True)
+
     # Admin moderation fields
     # rejection_reason: set when an admin rejects/removes a listing
     # flagged_at: timestamp when listing was flagged for review

@@ -74,6 +74,10 @@ class PropertyOut(BaseModel):
     area_sqm: Optional[int]
     status: str
     document_status: str
+    # Per-listing ownership verification (individual sellers). The rejection
+    # reason is only meaningful to the owner viewing their own listing.
+    verification_status: str = "unverified"
+    verification_rejection_reason: Optional[str] = None
     rejection_reason: Optional[str] = None
     flagged_at: Optional[datetime] = None
     reviewed_at: Optional[datetime] = None
@@ -101,6 +105,7 @@ class PropertyListItem(BaseModel):
     rooms: Optional[int]
     area_sqm: Optional[int]
     document_status: str
+    verification_status: str = "unverified"
     created_at: datetime
     cover_image_url: Optional[str] = None
     seller_display_name: Optional[str] = None

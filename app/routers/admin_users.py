@@ -15,11 +15,14 @@ from app.database import get_db
 from app.dependencies import get_current_admin
 from app.models.property import Property
 from app.models.user import User
+from app.models.verification_document import VerificationDocument
 from app.schemas.user import (
     UserAdminListItem,
     UserBanRequest,
     UserOut,
 )
+from app.schemas.verification import AdminPresignedDocument, RejectRequest
+from app.services.r2_storage import StorageError, generate_presigned_url
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/admin/users", tags=["admin"])
@@ -275,4 +278,69 @@ def unverify_seller(
     db.refresh(user)
 
     logger.info("User %s (%s) unverified by admin %s", user.id, user.email, admin.id)
+    return user
+
+
+@router.get(
+    "/{user_id}/verification/documents",
+    response_model=list[AdminPresignedDocument],
+)
+def list_company_verification_documents(
+    user_id: UUID,
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    """Presigned, short-lived URLs for a company's verification documents."""
+    user = db.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    docs = db.execute(
+        select(VerificationDocument)
+        .where(
+            VerificationDocument.user_id == user_id,
+            VerificationDocument.kind == "company",
+        )
+        .order_by(VerificationDocument.created_at.desc())
+    ).scalars().all()
+
+    out = []
+    for d in docs:
+        try:
+            url = generate_presigned_url(d.storage_key)
+        except StorageError:
+            continue  # skip a doc whose URL can't be signed rather than 500
+        out.append(
+            AdminPresignedDocument(
+                document_id=d.id,
+                original_filename=d.original_filename,
+                content_type=d.content_type,
+                size_bytes=d.size_bytes,
+                created_at=d.created_at,
+                url=url,
+            )
+        )
+    return out
+
+
+@router.post("/{user_id}/verification/reject", response_model=UserOut)
+def reject_company_verification(
+    user_id: UUID,
+    payload: RejectRequest,
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    """Reject a pending company verification, resetting it to 'unverified'."""
+    user = db.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    user.verification_status = "unverified"
+    db.commit()
+    db.refresh(user)
+
+    logger.info(
+        "Company verification for %s (%s) rejected by admin %s (reason: %s)",
+        user.id, user.email, admin.id, payload.reason,
+    )
     return user
