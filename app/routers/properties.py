@@ -3,12 +3,13 @@ from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile, File, status
 from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.dependencies import get_current_user, get_optional_user
+from app.limiter import limiter
 from app.models.property import Property
 from app.models.property_image import PropertyImage
 from app.models.user import User
@@ -30,8 +31,10 @@ MAX_IMAGES_PER_PROPERTY = 10
 
 
 @router.post("", response_model=PropertyOut, status_code=status.HTTP_201_CREATED)
+@limiter.limit("20/hour")
 def create_property(
     payload: PropertyCreate,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -322,8 +325,10 @@ def delete_property(
     response_model=PropertyImageOut,
     status_code=status.HTTP_201_CREATED,
 )
+@limiter.limit("60/hour")
 def upload_image(
     property_id: UUID,
+    request: Request,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),

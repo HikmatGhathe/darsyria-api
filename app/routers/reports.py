@@ -1,12 +1,13 @@
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.dependencies import get_current_user
+from app.limiter import limiter
 from app.models.property import Property
 from app.models.report import Report
 from app.models.user import User
@@ -17,8 +18,10 @@ router = APIRouter(prefix="/reports", tags=["reports"])
 
 
 @router.post("", status_code=status.HTTP_204_NO_CONTENT)
+@limiter.limit("20/hour")
 def create_report(
     payload: ReportCreate,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
