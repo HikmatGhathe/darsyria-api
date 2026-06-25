@@ -62,5 +62,11 @@ class Settings(BaseSettings):
     email_from: str
     email_from_name: str = "DarSyria"
 
+    # Sentry error monitoring. Leave SENTRY_DSN empty to disable entirely
+    # (the SDK is never initialized, so this is a complete no-op locally).
+    sentry_dsn: str = ""
+    # Fraction of requests traced for performance (0.0–1.0). Keep low in prod.
+    sentry_traces_sample_rate: float = 0.0
+
 
 settings = Settings()

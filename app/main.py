@@ -13,10 +13,15 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.database import SessionLocal, get_db
 from app.limiter import limiter
+from app.observability import init_sentry
 from app.routers import auth as auth_router, chat as chat_router, properties as properties_router, conversations as conversations_router, admin_properties as admin_properties_router, admin_users as admin_users_router, sellers as sellers_router, sitemap as sitemap_router, favorites as favorites_router, saved_searches as saved_searches_router, reports as reports_router, admin_reports as admin_reports_router
 from app.services.digest_service import run_daily_updates
 
 logger = logging.getLogger(__name__)
+
+# Wire Sentry before anything else so the SDK can instrument the app at
+# import time. No-op unless SENTRY_DSN is set.
+init_sentry()
 
 # Daily listing-digest run time. A plain in-process loop rather than an
 # external cron — no extra infra to run this app anywhere, and double
