@@ -452,24 +452,33 @@ def send_rejection_notification(
 
 
 # ---------------------------------------------------------------------------
-# New-listings digest email (followed sellers)
+# Combined daily-update email (followed sellers + saved-search matches)
 # ---------------------------------------------------------------------------
 
-DIGEST_SUBJECTS = {
-    "en": "New listings from sellers you follow",
-    "de": "Neue Inserate von Verkäufern, denen Sie folgen",
-    "ar": "إعلانات جديدة من البائعين الذين تتابعهم",
+DAILY_UPDATE_SUBJECTS = {
+    "en": "Your DarSyria daily update",
+    "de": "Ihr DarSyria-Tagesupdate",
+    "ar": "تحديثك اليومي من دار سوريا",
 }
 
+# Group headings for the two kinds of section.
+_FOLLOW_GROUP_HEADING = {
+    "en": "New from sellers you follow",
+    "de": "Neu von Verkäufern, denen Sie folgen",
+    "ar": "جديد من البائعين الذين تتابعهم",
+}
+_SEARCH_GROUP_HEADING = {
+    "en": "New matches for your saved searches",
+    "de": "Neue Treffer für Ihre gespeicherten Suchen",
+    "ar": "نتائج جديدة لعمليات البحث المحفوظة",
+}
+_MORE_LABEL = {"en": "+{n} more", "de": "+{n} weitere", "ar": "+{n} أخرى"}
 
-def _digest_sections_html(locale: str, sections: list[dict]) -> str:
+
+def _render_sections_html(locale: str, sections: list[dict]) -> str:
     is_rtl = locale == "ar"
     border_side = "right" if is_rtl else "left"
-    more_label = {
-        "en": "+{n} more",
-        "de": "+{n} weitere",
-        "ar": "+{n} أخرى",
-    }[locale]
+    more_label = _MORE_LABEL[locale]
 
     blocks = []
     for section in sections:
@@ -487,39 +496,54 @@ def _digest_sections_html(locale: str, sections: list[dict]) -> str:
         )
         blocks.append(f"""
           <div style="margin:0 0 20px 0;border-{border_side}:3px solid #2563eb;padding:4px 16px;">
-            <h2 style="font-size:15px;font-weight:600;margin:0 0 4px 0;color:#111111;">{section['seller_name']}</h2>
+            <h3 style="font-size:15px;font-weight:600;margin:0 0 4px 0;color:#111111;">{section['label']}</h3>
             {items}
             {more}
           </div>""")
     return "".join(blocks)
 
 
-def _digest_html(locale: str, sections: list[dict], frontend_url: str) -> str:
+def _render_group_html(locale: str, heading: str, sections: list[dict]) -> str:
+    if not sections:
+        return ""
+    return f"""
+      <h2 style="font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;color:#888888;margin:0 0 12px 0;">{heading}</h2>
+      {_render_sections_html(locale, sections)}"""
+
+
+def _daily_update_html(
+    locale: str, follow_sections: list[dict], search_sections: list[dict], frontend_url: str
+) -> str:
     is_rtl = locale == "ar"
     dir_attr = "rtl" if is_rtl else "ltr"
     text_align = "right" if is_rtl else "left"
 
     copy = {
         "en": {
-            "heading": "New listings from sellers you follow",
+            "heading": "Your daily update",
             "button": "Browse all listings",
-            "footer": "You're receiving this because you follow one or more sellers on DarSyria. Unfollow anytime from their profile.",
+            "footer": "You're receiving this because you follow sellers or have saved searches on DarSyria. Manage them in your account.",
             "signature": "— The DarSyria team",
         },
         "de": {
-            "heading": "Neue Inserate von Verkäufern, denen Sie folgen",
+            "heading": "Ihr Tagesupdate",
             "button": "Alle Inserate ansehen",
-            "footer": "Sie erhalten diese E-Mail, weil Sie einem oder mehreren Verkäufern auf DarSyria folgen. Sie können das Folgen jederzeit über das Profil beenden.",
+            "footer": "Sie erhalten diese E-Mail, weil Sie Verkäufern folgen oder gespeicherte Suchen auf DarSyria haben. Verwalten Sie diese in Ihrem Konto.",
             "signature": "— Das DarSyria-Team",
         },
         "ar": {
-            "heading": "إعلانات جديدة من البائعين الذين تتابعهم",
+            "heading": "تحديثك اليومي",
             "button": "تصفح جميع الإعلانات",
-            "footer": "تستلم هذه الرسالة لأنك تتابع بائعًا واحدًا أو أكثر على دار سوريا. يمكنك إلغاء المتابعة في أي وقت من صفحة ملفهم.",
+            "footer": "تستلم هذه الرسالة لأنك تتابع بائعين أو لديك عمليات بحث محفوظة على دار سوريا. يمكنك إدارتها من حسابك.",
             "signature": "— فريق دار سوريا",
         },
     }
     c = copy.get(locale, copy["en"])
+
+    groups = (
+        _render_group_html(locale, _FOLLOW_GROUP_HEADING[locale], follow_sections)
+        + _render_group_html(locale, _SEARCH_GROUP_HEADING[locale], search_sections)
+    )
 
     return f"""<!DOCTYPE html>
 <html dir="{dir_attr}" lang="{locale}">
@@ -535,7 +559,7 @@ def _digest_html(locale: str, sections: list[dict], frontend_url: str) -> str:
           <tr>
             <td style="padding:32px;text-align:{text_align};color:#111111;">
               <h1 style="font-size:20px;font-weight:600;margin:0 0 20px 0;color:#111111;">{c['heading']}</h1>
-              {_digest_sections_html(locale, sections)}
+              {groups}
               <table role="presentation" cellpadding="0" cellspacing="0" style="margin-top:8px;">
                 <tr>
                   <td style="background-color:#2563eb;border-radius:6px;">
@@ -556,45 +580,49 @@ def _digest_html(locale: str, sections: list[dict], frontend_url: str) -> str:
 </html>"""
 
 
-def _digest_text(locale: str, sections: list[dict], frontend_url: str) -> str:
-    """Plain-text version for clients that don't render HTML."""
-    more_label = {
-        "en": "+{n} more",
-        "de": "+{n} weitere",
-        "ar": "+{n} أخرى",
-    }[locale]
-
+def _render_sections_text(locale: str, sections: list[dict]) -> str:
+    more_label = _MORE_LABEL[locale]
     lines = []
     for section in sections:
-        lines.append(f"\n{section['seller_name']}")
+        lines.append(f"\n{section['label']}")
         for listing in section["listings"]:
             lines.append(f"  - {listing['title']} ({listing['location']}, {listing['price']})\n    {listing['url']}")
         if section["more_count"] > 0:
             lines.append(f"  {more_label.format(n=section['more_count'])}")
+    return "\n".join(lines)
 
-    body = "\n".join(lines)
+
+def _daily_update_text(
+    locale: str, follow_sections: list[dict], search_sections: list[dict], frontend_url: str
+) -> str:
+    parts = []
+    if follow_sections:
+        parts.append(_FOLLOW_GROUP_HEADING[locale] + "\n" + _render_sections_text(locale, follow_sections))
+    if search_sections:
+        parts.append(_SEARCH_GROUP_HEADING[locale] + "\n" + _render_sections_text(locale, search_sections))
+    body = "\n\n".join(parts)
     browse_url = f"{frontend_url}/{locale}/properties"
 
     if locale == "de":
-        return f"Neue Inserate von Verkäufern, denen Sie folgen\n{body}\n\nAlle Inserate ansehen:\n{browse_url}\n\n— Das DarSyria-Team"
+        return f"Ihr Tagesupdate\n\n{body}\n\nAlle Inserate ansehen:\n{browse_url}\n\n— Das DarSyria-Team"
     if locale == "ar":
-        return f"إعلانات جديدة من البائعين الذين تتابعهم\n{body}\n\nتصفح جميع الإعلانات:\n{browse_url}\n\n— فريق دار سوريا"
-    return f"New listings from sellers you follow\n{body}\n\nBrowse all listings:\n{browse_url}\n\n— The DarSyria team"
+        return f"تحديثك اليومي\n\n{body}\n\nتصفح جميع الإعلانات:\n{browse_url}\n\n— فريق دار سوريا"
+    return f"Your daily update\n\n{body}\n\nBrowse all listings:\n{browse_url}\n\n— The DarSyria team"
 
 
-def send_new_listings_digest(
+def send_daily_update(
     to_email: str,
-    sections: list[dict],
+    follow_sections: list[dict],
+    search_sections: list[dict],
     locale: str = "en",
 ) -> None:
     """
-    Send a digest email covering new listings across every seller the
-    recipient follows. `sections` is a list of dicts:
-        {"seller_name": str, "listings": [{"title", "url", "location", "price"}, ...], "more_count": int}
-
-    Raises EmailError if Resend rejects the send.
+    Send the combined daily-update email. `follow_sections` and
+    `search_sections` are each a list of:
+        {"label": str, "listings": [{"title", "url", "location", "price"}, ...], "more_count": int}
+    At least one group should be non-empty. Raises EmailError on send failure.
     """
-    if locale not in DIGEST_SUBJECTS:
+    if locale not in DAILY_UPDATE_SUBJECTS:
         locale = "en"
 
     from_address = f"{settings.email_from_name} <{settings.email_from}>"
@@ -603,18 +631,19 @@ def send_new_listings_digest(
         result = resend.Emails.send({
             "from": from_address,
             "to": to_email,
-            "subject": DIGEST_SUBJECTS[locale],
-            "html": _digest_html(locale, sections, settings.frontend_url),
-            "text": _digest_text(locale, sections, settings.frontend_url),
+            "subject": DAILY_UPDATE_SUBJECTS[locale],
+            "html": _daily_update_html(locale, follow_sections, search_sections, settings.frontend_url),
+            "text": _daily_update_text(locale, follow_sections, search_sections, settings.frontend_url),
         })
     except Exception as e:
-        logger.exception("Resend send failed for listings digest to %s", to_email)
-        raise EmailError(f"Could not send digest email: {e}") from e
+        logger.exception("Resend send failed for daily update to %s", to_email)
+        raise EmailError(f"Could not send daily update email: {e}") from e
 
     logger.info(
-        "Listings digest sent to %s (resend_id=%s, locale=%s, sections=%d)",
+        "Daily update sent to %s (resend_id=%s, locale=%s, follow=%d, search=%d)",
         to_email,
         result.get("id") if isinstance(result, dict) else "?",
         locale,
-        len(sections),
+        len(follow_sections),
+        len(search_sections),
     )

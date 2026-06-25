@@ -21,6 +21,7 @@ from app.schemas.property import (
 )
 from app.services.r2_storage import upload_property_image, delete_object, delete_property_images, StorageError
 from app.services.seller_helpers import seller_display_name
+from app.services.property_filters import apply_property_filters
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/properties", tags=["properties"])
@@ -60,38 +61,6 @@ def create_property(
 
     logger.info("Property %s created by user %s", prop.id, current_user.id)
     return prop
-
-
-# Active-only filter clauses shared by the list endpoint, the count endpoint,
-# and saved-search matching. Any statement passed in must already join User
-# (the seller filter references User columns).
-def _apply_property_filters(
-    stmt,
-    *,
-    city: Optional[str] = None,
-    property_type: Optional[str] = None,
-    min_price: Optional[float] = None,
-    max_price: Optional[float] = None,
-    rooms: Optional[int] = None,
-    seller: Optional[str] = None,
-):
-    stmt = stmt.where(Property.status == "active")
-    if city:
-        stmt = stmt.where(Property.city.ilike(f"%{city}%"))
-    if property_type:
-        stmt = stmt.where(Property.property_type == property_type)
-    if min_price is not None:
-        stmt = stmt.where(Property.price_amount >= min_price)
-    if max_price is not None:
-        stmt = stmt.where(Property.price_amount <= max_price)
-    if rooms is not None:
-        stmt = stmt.where(Property.rooms == rooms)
-    if seller:
-        like = f"%{seller}%"
-        stmt = stmt.where(
-            (User.company_name.ilike(like)) | (User.full_name.ilike(like))
-        )
-    return stmt
 
 
 _PROPERTY_SORTS = {
@@ -136,7 +105,7 @@ def list_properties(
             ),
         )
     )
-    stmt = _apply_property_filters(
+    stmt = apply_property_filters(
         stmt,
         city=city,
         property_type=property_type,
@@ -177,7 +146,7 @@ def count_properties(
     """Total active listings matching the same filters as the list endpoint
     (used by the browse page for 'X results' and 'Page N of M')."""
     stmt = select(func.count(Property.id)).join(User, Property.owner_id == User.id)
-    stmt = _apply_property_filters(
+    stmt = apply_property_filters(
         stmt,
         city=city,
         property_type=property_type,

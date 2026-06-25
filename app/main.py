@@ -13,8 +13,8 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.database import SessionLocal, get_db
 from app.limiter import limiter
-from app.routers import auth as auth_router, chat as chat_router, properties as properties_router, conversations as conversations_router, admin_properties as admin_properties_router, admin_users as admin_users_router, sellers as sellers_router, sitemap as sitemap_router, favorites as favorites_router
-from app.services.digest_service import run_listing_digests
+from app.routers import auth as auth_router, chat as chat_router, properties as properties_router, conversations as conversations_router, admin_properties as admin_properties_router, admin_users as admin_users_router, sellers as sellers_router, sitemap as sitemap_router, favorites as favorites_router, saved_searches as saved_searches_router
+from app.services.digest_service import run_daily_updates
 
 logger = logging.getLogger(__name__)
 
@@ -37,9 +37,9 @@ async def _digest_loop():
         await asyncio.sleep(_seconds_until_next_digest_run())
         try:
             with SessionLocal() as db:
-                run_listing_digests(db)
+                run_daily_updates(db)
         except Exception:
-            logger.exception("Listing digest run failed")
+            logger.exception("Daily update run failed")
 
 
 @asynccontextmanager
@@ -81,6 +81,7 @@ app.include_router(admin_users_router.router)
 app.include_router(sellers_router.router)
 app.include_router(sitemap_router.router)
 app.include_router(favorites_router.router)
+app.include_router(saved_searches_router.router)
 
 
 @app.get("/health")

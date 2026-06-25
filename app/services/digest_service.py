@@ -1,7 +1,5 @@
 import logging
-from collections import defaultdict
 from datetime import datetime, timezone
-from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -9,16 +7,17 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.models.follow import Follow
 from app.models.property import Property
+from app.models.saved_search import SavedSearch
 from app.models.user import User
-from app.services.email_service import EmailError, send_new_listings_digest
+from app.services.email_service import EmailError, send_daily_update
+from app.services.property_filters import apply_property_filters
 from app.services.seller_helpers import seller_display_name
 
 logger = logging.getLogger(__name__)
 
-# Per-seller cap on how many listings are rendered inline in one digest
-# email; the rest are summarized as "+N more". A company posting many
-# listings in a day should not blow up the email, but every new listing
-# still advances the watermark (the cap only affects what's *shown*).
+# Per-section cap on listings rendered inline; the rest become "+N more".
+# Every new listing still advances the watermark — the cap only affects
+# what's shown.
 MAX_LISTINGS_PER_SECTION = 10
 
 
@@ -29,40 +28,49 @@ def _format_price(amount, currency: str) -> str:
         return f"{amount} {currency}"
 
 
-def run_listing_digests(db: Session) -> int:
+def _listing_entry(p: Property, locale: str) -> dict:
+    return {
+        "title": p.title,
+        "url": f"{settings.frontend_url}/{locale}/properties/{p.id}",
+        "location": f"{p.neighborhood}, {p.city}" if p.neighborhood else p.city,
+        "price": _format_price(p.price_amount, p.price_currency),
+    }
+
+
+def run_daily_updates(db: Session) -> int:
     """
-    Send one digest email per follower covering every new listing across
-    everyone they follow (grouped by seller), then advance the per-follow
-    watermark. Safe to call repeatedly — a follower with nothing new since
-    their last digest gets no email and nothing is changed for them.
+    Send one combined daily-update email per user, merging:
+      (a) new listings from sellers they follow, and
+      (b) new matches for their saved searches.
 
-    Meant to run once a day via the scheduler in main.py, but is plain,
-    synchronous, and curl/script-testable on its own.
-
-    Returns the number of emails sent.
+    "New" is published_at > the relevant watermark (Follow.last_digest_at or
+    SavedSearch.last_alerted_at, falling back to the row's created_at). The
+    watermarks advance only after a successful send, so a failed email is
+    retried next run. Safe to call repeatedly; returns the number of emails
+    sent. Runs daily via the scheduler in main.py but is plain and
+    script-testable on its own.
     """
-    follows = db.execute(
-        select(Follow)
-        .join(User, Follow.follower_id == User.id)
-        .where(User.deleted_at.is_(None))
-    ).scalars().all()
-
-    by_follower: dict[UUID, list[Follow]] = defaultdict(list)
-    for follow in follows:
-        by_follower[follow.follower_id].append(follow)
+    follower_ids = db.execute(select(Follow.follower_id).distinct()).scalars().all()
+    searcher_ids = db.execute(select(SavedSearch.user_id).distinct()).scalars().all()
+    user_ids = set(follower_ids) | set(searcher_ids)
 
     sent = 0
-    for follower_id, follower_follows in by_follower.items():
-        follower = db.get(User, follower_id)
-        if not follower or follower.deleted_at is not None:
+    for user_id in user_ids:
+        user = db.get(User, user_id)
+        if not user or user.deleted_at is not None:
             continue
+        locale = user.locale if user.locale in ("en", "de", "ar") else "en"
 
-        locale = follower.locale if follower.locale in ("en", "de", "ar") else "en"
+        follow_sections: list[dict] = []
+        touched_follows: list[Follow] = []
+        search_sections: list[dict] = []
+        touched_searches: list[SavedSearch] = []
 
-        sections = []
-        touched_follows = []
-
-        for follow in follower_follows:
+        # (a) New listings from followed sellers.
+        follows = db.execute(
+            select(Follow).where(Follow.follower_id == user_id)
+        ).scalars().all()
+        for follow in follows:
             watermark = follow.last_digest_at or follow.created_at
             new_listings = db.execute(
                 select(Property)
@@ -74,44 +82,71 @@ def run_listing_digests(db: Session) -> int:
                 )
                 .order_by(Property.published_at.desc())
             ).scalars().all()
-
             if not new_listings:
                 continue
-
             owner = db.get(User, follow.followed_user_id)
             if not owner or owner.deleted_at is not None:
                 continue
-
             shown = new_listings[:MAX_LISTINGS_PER_SECTION]
-            sections.append({
-                "seller_name": seller_display_name(owner) or owner.email.split("@")[0],
-                "listings": [
-                    {
-                        "title": p.title,
-                        "url": f"{settings.frontend_url}/{locale}/properties/{p.id}",
-                        "location": f"{p.neighborhood}, {p.city}" if p.neighborhood else p.city,
-                        "price": _format_price(p.price_amount, p.price_currency),
-                    }
-                    for p in shown
-                ],
+            follow_sections.append({
+                "label": seller_display_name(owner) or owner.email.split("@")[0],
+                "listings": [_listing_entry(p, locale) for p in shown],
                 "more_count": len(new_listings) - len(shown),
             })
             touched_follows.append(follow)
 
-        if not sections:
+        # (b) New listings matching saved searches.
+        searches = db.execute(
+            select(SavedSearch).where(SavedSearch.user_id == user_id)
+        ).scalars().all()
+        for ss in searches:
+            watermark = ss.last_alerted_at or ss.created_at
+            stmt = select(Property).join(User, Property.owner_id == User.id)
+            stmt = apply_property_filters(
+                stmt,
+                city=ss.city,
+                property_type=ss.property_type,
+                min_price=ss.min_price,
+                max_price=ss.max_price,
+                rooms=ss.rooms,
+                seller=ss.seller,
+            )
+            stmt = stmt.where(
+                Property.published_at.isnot(None),
+                Property.published_at > watermark,
+            ).order_by(Property.published_at.desc())
+            matches = db.execute(stmt).scalars().all()
+            if not matches:
+                continue
+            shown = matches[:MAX_LISTINGS_PER_SECTION]
+            search_sections.append({
+                "label": ss.label,
+                "listings": [_listing_entry(p, locale) for p in shown],
+                "more_count": len(matches) - len(shown),
+            })
+            touched_searches.append(ss)
+
+        if not follow_sections and not search_sections:
             continue
 
         try:
-            send_new_listings_digest(to_email=follower.email, sections=sections, locale=locale)
+            send_daily_update(
+                to_email=user.email,
+                follow_sections=follow_sections,
+                search_sections=search_sections,
+                locale=locale,
+            )
         except EmailError:
-            logger.exception("Digest email failed for follower %s — will retry next run", follower_id)
+            logger.exception("Daily update failed for user %s — will retry next run", user_id)
             continue
 
         now = datetime.now(timezone.utc)
         for follow in touched_follows:
             follow.last_digest_at = now
+        for ss in touched_searches:
+            ss.last_alerted_at = now
         db.commit()
         sent += 1
 
-    logger.info("Listing digest run complete: %d email(s) sent", sent)
+    logger.info("Daily update run complete: %d email(s) sent", sent)
     return sent
