@@ -18,6 +18,7 @@ from app.schemas.property import (
     PropertyUpdate,
     PropertyOut,
     PropertyListItem,
+    MyListingItem,
     PropertyImageOut,
 )
 from app.models.invoice import Invoice
@@ -203,6 +204,40 @@ def count_properties(
         seller=seller,
     )
     return {"count": db.execute(stmt).scalar_one()}
+
+
+@router.get("/mine", response_model=list[MyListingItem])
+def my_listings(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """The current user's own listings across all statuses, newest first, with
+    a cover image and the latest invoice summary — for the seller dashboard."""
+    rows = db.execute(
+        select(Property, PropertyImage)
+        .outerjoin(
+            PropertyImage,
+            and_(PropertyImage.property_id == Property.id, PropertyImage.position == 0),
+        )
+        .where(Property.owner_id == current_user.id)
+        .order_by(Property.created_at.desc())
+    ).all()
+
+    items = []
+    for prop, cover in rows:
+        item = MyListingItem.model_validate(prop)
+        item.cover_image_url = cover.public_url if cover else None
+        invoice = db.execute(
+            select(Invoice)
+            .where(Invoice.property_id == prop.id, Invoice.status != "void")
+            .order_by(Invoice.created_at.desc())
+        ).scalars().first()
+        if invoice:
+            item.invoice_status = invoice.status
+            item.invoice_amount = invoice.amount
+            item.invoice_currency = invoice.currency
+        items.append(item)
+    return items
 
 
 @router.get("/{property_id}", response_model=PropertyOut)

@@ -115,6 +115,27 @@ class PropertyListItem(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+# Owner's management view of their own listing (all statuses + invoice summary).
+class MyListingItem(BaseModel):
+    id: UUID
+    title: str
+    status: str
+    verification_status: str = "unverified"
+    governorate: Optional[str] = None
+    city: str
+    price_amount: Decimal
+    price_currency: str
+    created_at: datetime
+    published_at: Optional[datetime] = None
+    cover_image_url: Optional[str] = None
+    # Latest non-void invoice for this listing, if any.
+    invoice_status: Optional[str] = None
+    invoice_amount: Optional[Decimal] = None
+    invoice_currency: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 # Update schema: all fields optional, only what's sent gets changed
 class PropertyUpdate(BaseModel):
     title: Optional[str] = Field(default=None, min_length=5, max_length=200)
