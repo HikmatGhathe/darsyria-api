@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 from uuid import UUID
 
@@ -20,14 +20,51 @@ from app.schemas.property import (
     PropertyListItem,
     PropertyImageOut,
 )
+from app.models.invoice import Invoice
 from app.services.r2_storage import upload_property_image, delete_object, delete_property_images, StorageError
 from app.services.seller_helpers import seller_display_name
 from app.services.property_filters import apply_property_filters
+from app.services import settings_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/properties", tags=["properties"])
 
 MAX_IMAGES_PER_PROPERTY = 10
+
+# How long a seller has to pay an invoice after publishing.
+INVOICE_DUE_DAYS = 14
+
+
+def _maybe_create_invoice(db: Session, prop: Property, owner: User) -> None:
+    """When payment is required, raise one unpaid invoice for this listing.
+
+    No-op when the admin has payment turned off (free mode), or when the listing
+    already has a non-void invoice (so republishing never double-charges).
+    """
+    if not settings_service.get_bool(db, settings_service.PAYMENT_REQUIRED):
+        return
+
+    existing = db.execute(
+        select(Invoice.id).where(
+            Invoice.property_id == prop.id, Invoice.status != "void"
+        )
+    ).first()
+    if existing:
+        return
+
+    amount, currency = settings_service.listing_price(db)
+    db.add(
+        Invoice(
+            property_id=prop.id,
+            user_id=owner.id,
+            amount=amount,
+            currency=currency,
+            status="unpaid",
+            provider="manual",
+            due_at=datetime.now(timezone.utc) + timedelta(days=INVOICE_DUE_DAYS),
+        )
+    )
+    logger.info("Invoice raised for property %s (%s %s)", prop.id, amount, currency)
 
 
 @router.post("", response_model=PropertyOut, status_code=status.HTTP_201_CREATED)
@@ -228,6 +265,9 @@ def publish_property(
     prop.status = "active"
     if prop.published_at is None:
         prop.published_at = datetime.now(timezone.utc)
+
+    _maybe_create_invoice(db, prop, current_user)
+
     db.commit()
     db.refresh(prop)
 

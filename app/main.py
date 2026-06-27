@@ -14,7 +14,7 @@ from app.config import settings
 from app.database import SessionLocal, get_db
 from app.limiter import limiter
 from app.observability import init_sentry
-from app.routers import auth as auth_router, chat as chat_router, properties as properties_router, conversations as conversations_router, admin_properties as admin_properties_router, admin_users as admin_users_router, sellers as sellers_router, sitemap as sitemap_router, favorites as favorites_router, saved_searches as saved_searches_router, reports as reports_router, admin_reports as admin_reports_router, verification as verification_router
+from app.routers import auth as auth_router, chat as chat_router, properties as properties_router, conversations as conversations_router, admin_properties as admin_properties_router, admin_users as admin_users_router, sellers as sellers_router, sitemap as sitemap_router, favorites as favorites_router, saved_searches as saved_searches_router, reports as reports_router, admin_reports as admin_reports_router, verification as verification_router, billing as billing_router, admin_billing as admin_billing_router
 from app.services.digest_service import run_daily_updates
 
 logger = logging.getLogger(__name__)
@@ -90,6 +90,8 @@ app.include_router(saved_searches_router.router)
 app.include_router(reports_router.router)
 app.include_router(admin_reports_router.router)
 app.include_router(verification_router.router)
+app.include_router(billing_router.router)
+app.include_router(admin_billing_router.router)
 
 
 @app.get("/health")
