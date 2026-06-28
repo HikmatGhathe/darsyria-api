@@ -8,7 +8,8 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB:-darsyria}
     ports:
-      - "5432:5432"
+      # Bound to localhost only — never expose Postgres to the public internet.
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -28,7 +29,8 @@ services:
       # is reachable by service name, not "localhost".
       DATABASE_URL: postgresql://${POSTGRES_USER:-darsyria}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-darsyria}
     ports:
-      - "8000:8000"
+      # Localhost only — the public entrypoint is Caddy (see the caddy service).
+      - "127.0.0.1:8000:8000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -57,10 +59,34 @@ services:
       # Absolute public origin, used server-side for canonical/OG/sitemap URLs.
       NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL:-http://localhost:3000}
     ports:
-      - "3000:3000"
+      # Localhost only — the public entrypoint is Caddy (see the caddy service).
+      - "127.0.0.1:3000:3000"
     depends_on:
       - api
+
+  # Public entrypoint with automatic HTTPS. Only started for production via the
+  # "prod" profile: `docker compose --profile prod up -d`. Needs SITE_DOMAIN set
+  # and DNS (apex + api.*) pointing at this server.
+  caddy:
+    image: caddy:2
+    container_name: darsyria-caddy
+    restart: unless-stopped
+    profiles: ["prod"]
+    environment:
+      SITE_DOMAIN: ${SITE_DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - api
+      - frontend
 
 volumes:
   postgres_data:
   embedding_cache:
+  caddy_data:
+  caddy_config:

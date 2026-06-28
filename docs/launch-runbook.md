@@ -124,30 +124,69 @@ gives you:
 
 ---
 
-## 6. Deploy
+## 6. Deploy (DigitalOcean droplet + Docker Compose + Caddy)
 
-- [ ] Put the API and frontend behind a **reverse proxy with TLS** (Caddy,
-      Traefik, or nginx + certbot). Suggested routing:
-      `https://darsyria.com` → frontend `:3000`,
-      `https://api.darsyria.com` → api `:8000`.
-      Terminate HTTPS at the proxy. (Compose only exposes plain ports.)
-- [ ] On the server:
-      ```bash
-      cd darsyria-api
-      docker compose build      # picks up NEXT_PUBLIC_* build args from env
-      docker compose up -d
-      ```
-- [ ] First boot: the API downloads the embedding model (~1.3 GB) — give it a
-      few minutes; it's cached in the `embedding_cache` volume afterward.
-- [ ] Health checks pass:
-      ```bash
-      curl https://api.darsyria.com/health
-      curl https://api.darsyria.com/health/db   # database/pgvector/schema OK
-      ```
+The repo ships a `caddy` service (in `docker-compose.yml`, `prod` profile) that
+fronts everything with **automatic HTTPS** — no nginx/certbot to configure.
+
+**6.1 Provision (DigitalOcean — covered by the $200 student credit)**
+- [ ] Create a **Droplet**: Ubuntu LTS, **4 GB / 2 vCPU** (the API loads a
+      ~1.3 GB embedding model — 2 GB risks OOM). Add your SSH key.
+- [ ] Note its public IP.
+
+**6.2 DNS (your registrar — e.g. Namecheap student domain)**
+- [ ] `A  @    <droplet-ip>`  (apex → frontend)
+- [ ] `A  api  <droplet-ip>`  (api subdomain → API)
+- [ ] (optional) `A  www  <droplet-ip>`
+
+**6.3 Server setup (SSH in as root/sudo)**
+```bash
+# Docker + compose plugin
+curl -fsSL https://get.docker.com | sh
+
+# Firewall: only SSH + HTTP/HTTPS open (DB/app ports stay private)
+ufw allow OpenSSH && ufw allow 80 && ufw allow 443 && ufw --force enable
+
+# Get the code (push both repos to GitHub first — see §0 below)
+git clone <your-darsyria-api-repo> darsyria-api
+git clone <your-darsyria> darsyria          # sibling dir; compose builds ../darsyria
+cd darsyria-api
+cp .env.example .env && nano .env            # fill in real values (§2/§3)
+```
+- [ ] In `.env` set at minimum: `SITE_DOMAIN`, `APP_ENV=production`, fresh
+      `SECRET_KEY`/`JWT_SECRET`/`POSTGRES_PASSWORD`, `FRONTEND_URL=https://<domain>`,
+      `ALLOWED_ORIGINS=https://<domain>`, `NEXT_PUBLIC_SITE_URL=https://<domain>`,
+      `NEXT_PUBLIC_API_URL=https://api.<domain>`, R2 + Resend creds.
+
+**6.4 Launch**
+```bash
+docker compose --profile prod build    # bakes NEXT_PUBLIC_* into the frontend
+docker compose --profile prod up -d     # starts postgres, api, frontend, caddy
+```
+- [ ] First boot: the API downloads the embedding model (~1.3 GB) and runs
+      migrations automatically — give it a few minutes (cached in
+      `embedding_cache` afterward). Watch with `docker compose logs -f api`.
+- [ ] Caddy issues TLS certs automatically once DNS resolves + 80/443 are open.
+
+**6.5 Verify**
+```bash
+curl https://api.<domain>/health
+curl https://api.<domain>/health/db      # database/pgvector/schema OK
+# open https://<domain> in a browser
+```
+
+> **§0 — code must be on GitHub first.** Both repos are local-only right now.
+> Create two private GitHub repos (Student Pack gives unlimited private repos),
+> then from each local repo: `git remote add origin <url> && git push -u origin master`.
+> Redeploys after that are: `git pull && docker compose --profile prod up -d --build`.
 
 > **Single-replica note:** the daily digest runs on an in-process scheduler at
 > 09:00 UTC inside the API. Run **one** API replica, or the digest fires once
 > per replica. Fine at launch scale; revisit if you scale out.
+
+> **Ports:** Postgres/API/frontend are bound to `127.0.0.1` only — Caddy (the
+> sole public service) reaches them over the Docker network. Never open 5432/
+> 8000/3000 in the firewall.
 
 ---
 

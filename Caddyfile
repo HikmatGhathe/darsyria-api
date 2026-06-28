@@ -1,0 +1,14 @@
+# Caddy reverse proxy with automatic HTTPS (Let's Encrypt).
+# SITE_DOMAIN comes from the environment (set it in .env, e.g. darsyria.com).
+# DNS for both the apex and the api.* subdomain must point at this server, and
+# ports 80 + 443 must be open, for certificates to be issued.
+
+{$SITE_DOMAIN} {
+	encode zstd gzip
+	reverse_proxy frontend:3000
+}
+
+api.{$SITE_DOMAIN} {
+	encode zstd gzip
+	reverse_proxy api:8000
+}
