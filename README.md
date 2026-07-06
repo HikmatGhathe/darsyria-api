@@ -3,7 +3,7 @@
 The backend for **DarSyria**, a full-stack, trilingual real-estate marketplace
 connecting real-estate companies in Syria with the Syrian diaspora in Europe.
 This repo is the **FastAPI service**; the web frontend lives in
-**[darsyria](https://github.com/USERNAME/darsyria)** (Next.js).
+**[darsyria](https://github.com/HikmatGhathe/darsyria)** (Next.js).
 
 > Personal/portfolio project.
 
