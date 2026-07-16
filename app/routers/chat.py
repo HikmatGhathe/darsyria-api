@@ -10,7 +10,7 @@ from app.limiter import limiter
 from app.models.chat_message import ChatMessage
 from app.models.user import User
 from app.schemas.chat import ChatRequest, ChatResponse
-from app.services.ollama_service import generate_chat_response, OllamaError
+from app.services.llm_service import generate_chat_response, LLMError
 from app.services.retrieval import format_retrieval_context, retrieve_article_chunks
 
 logger = logging.getLogger(__name__)
@@ -43,7 +43,7 @@ async def post_chat(
     db.add(user_msg)
     db.commit()
 
-    # Convert history to plain dicts for Ollama
+    # Convert history to plain dicts for the LLM
     history = [{"role": m.role, "content": m.content} for m in payload.history]
 
     # Retrieve relevant DarSyria article excerpts for source-grounded answers.
@@ -62,7 +62,7 @@ async def post_chat(
             detail="The knowledge base is temporarily unavailable. Please try again shortly.",
         ) from e
 
-    # Call Ollama
+    # Call the chat LLM (OpenAI-compatible provider, configured via env)
     try:
         result = await generate_chat_response(
             user_message=payload.message,
@@ -70,8 +70,8 @@ async def post_chat(
             locale=payload.locale,
             retrieved_context=retrieved_context,
         )
-    except OllamaError as e:
-        logger.error("Ollama failed: %s", e)
+    except LLMError as e:
+        logger.error("Chat LLM failed: %s", e)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="The AI assistant is temporarily unavailable. Please try again shortly."

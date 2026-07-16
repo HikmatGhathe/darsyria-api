@@ -34,10 +34,31 @@ class Settings(BaseSettings):
     def cors_allowed_origins(self) -> list[str]:
         return [origin.strip() for origin in self.allowed_origins.split(",") if origin.strip()]
 
-    # Ollama
+    # Chat LLM — any OpenAI-compatible provider (Groq, OpenAI, Together,
+    # OpenRouter, or Ollama's own /v1 endpoint). Set LLM_BASE_URL to the
+    # provider's base, e.g. https://api.groq.com/openai/v1
+    llm_base_url: str = ""
+    llm_api_key: str = ""
+    llm_model: str = ""
+
+    # Legacy Ollama vars — deprecated aliases kept so existing deployments keep
+    # working. The LLM_* settings above take precedence when set.
     ollama_api_url: str = ""
     ollama_api_key: str = ""
     ollama_model: str = "gemma2:27b"
+
+    @property
+    def chat_base_url(self) -> str:
+        """OpenAI-compatible base URL for the chat model (LLM_* wins)."""
+        return (self.llm_base_url or self.ollama_api_url).rstrip("/")
+
+    @property
+    def chat_api_key(self) -> str:
+        return self.llm_api_key or self.ollama_api_key
+
+    @property
+    def chat_model(self) -> str:
+        return self.llm_model or self.ollama_model
 
     # RAG / Embeddings
     article_source_dir: str = "content/articles"

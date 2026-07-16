@@ -1,6 +1,5 @@
 import logging
 import time
-from typing import Optional
 
 import httpx
 
@@ -48,8 +47,8 @@ Regeln:
 }
 
 
-class OllamaError(Exception):
-    """Raised when Ollama returns an error or fails to respond."""
+class LLMError(Exception):
+    """Raised when the chat LLM returns an error or fails to respond."""
 
 
 async def generate_chat_response(
@@ -59,13 +58,17 @@ async def generate_chat_response(
     retrieved_context: str | None = None,
 ) -> dict:
     """
-    Send a message to Ollama Cloud and return the response.
+    Send a chat completion request to an OpenAI-compatible provider (Groq,
+    OpenAI, Together, OpenRouter, Ollama's /v1, ...) and return the response.
+
+    Provider is chosen entirely via env (LLM_BASE_URL / LLM_API_KEY / LLM_MODEL),
+    so switching providers never needs a code change.
 
     Returns a dict with:
       content, model, prompt_tokens, completion_tokens, latency_ms
     """
-    if not settings.ollama_api_url or not settings.ollama_api_key:
-        raise OllamaError("Ollama is not configured")
+    if not settings.chat_base_url or not settings.chat_api_key:
+        raise LLMError("Chat LLM is not configured")
 
     if locale not in SYSTEM_PROMPTS:
         locale = "en"
@@ -90,13 +93,13 @@ async def generate_chat_response(
     messages.append({"role": "user", "content": user_message})
 
     payload = {
-        "model": settings.ollama_model,
+        "model": settings.chat_model,
         "messages": messages,
         "stream": False,
     }
 
     headers = {
-        "Authorization": f"Bearer {settings.ollama_api_key}",
+        "Authorization": f"Bearer {settings.chat_api_key}",
         "Content-Type": "application/json",
     }
 
@@ -104,31 +107,35 @@ async def generate_chat_response(
     try:
         async with httpx.AsyncClient(timeout=90.0) as client:
             response = await client.post(
-                f"{settings.ollama_api_url}/chat",
+                f"{settings.chat_base_url}/chat/completions",
                 headers=headers,
                 json=payload,
             )
     except httpx.HTTPError as e:
-        logger.exception("Ollama HTTP error")
-        raise OllamaError(f"Network error talking to Ollama: {e}") from e
+        logger.exception("Chat LLM HTTP error")
+        raise LLMError(f"Network error talking to the chat LLM: {e}") from e
 
     elapsed_ms = int((time.perf_counter() - start) * 1000)
 
     if response.status_code != 200:
-        logger.error("Ollama returned %s: %s", response.status_code, response.text)
-        raise OllamaError(f"Ollama returned status {response.status_code}")
+        logger.error("Chat LLM returned %s: %s", response.status_code, response.text)
+        raise LLMError(f"Chat LLM returned status {response.status_code}")
 
     data = response.json()
 
-    content = (data.get("message") or {}).get("content")
+    choices = data.get("choices") or []
+    content = None
+    if choices:
+        content = (choices[0].get("message") or {}).get("content")
     if not content:
-        logger.error("Ollama response had no content: %s", data)
-        raise OllamaError("Ollama returned empty response")
+        logger.error("Chat LLM response had no content: %s", data)
+        raise LLMError("Chat LLM returned empty response")
 
+    usage = data.get("usage") or {}
     return {
         "content": content.strip(),
-        "model": data.get("model", settings.ollama_model),
-        "prompt_tokens": data.get("prompt_eval_count"),
-        "completion_tokens": data.get("eval_count"),
+        "model": data.get("model", settings.chat_model),
+        "prompt_tokens": usage.get("prompt_tokens"),
+        "completion_tokens": usage.get("completion_tokens"),
         "latency_ms": elapsed_ms,
     }
