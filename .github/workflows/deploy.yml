@@ -1,0 +1,29 @@
+name: Deploy to Azure VM
+
+# Run on every push to main, and allow manual runs from the Actions tab.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: darsyria.me
+          username: azureuser
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          command_timeout: 20m
+          script: |
+            set -e
+            echo "Pulling latest code..."
+            cd ~/darsyria && git pull origin main
+            cd ~/darsyria-api && git pull origin main
+            echo "Rebuilding and restarting containers..."
+            docker compose --profile prod up -d --build
+            echo "Cleaning up old images..."
+            docker image prune -f
+            echo "Deploy complete."
