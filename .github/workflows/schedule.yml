@@ -1,0 +1,48 @@
+name: VM start/stop schedule
+
+# GitHub cron is always UTC. Berlin summer (CEST) = UTC+2:
+#   09:00 Berlin = 07:00 UTC  -> start,  Mon-Fri
+#   17:00 Berlin = 15:00 UTC  -> stop,   Mon-Fri
+# (In winter/CET the VM would start/stop one hour earlier; fine for this use.)
+on:
+  schedule:
+    - cron: '0 7 * * 1-5'
+    - cron: '0 15 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'start or stop (manual test)'
+        required: true
+        default: 'start'
+        type: choice
+        options: [start, stop]
+
+jobs:
+  schedule:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Decide start or stop
+        id: decide
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "act=${{ github.event.inputs.action }}" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event.schedule }}" = "0 7 * * 1-5" ]; then
+            echo "act=start" >> "$GITHUB_OUTPUT"
+          else
+            echo "act=stop" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Start or stop the VM
+        run: |
+          if [ "${{ steps.decide.outputs.act }}" = "start" ]; then
+            echo "Starting VM..."
+            az vm start -g darsyria-rg -n darsyria-vm
+          else
+            echo "Deallocating VM..."
+            az vm deallocate -g darsyria-rg -n darsyria-vm
+          fi
