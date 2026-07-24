@@ -1,17 +1,18 @@
 name: VM start/stop schedule
 
-# GitHub cron is always UTC. Berlin summer (CEST) = UTC+2:
-#   09:00 Berlin = 07:00 UTC  -> start,  Mon-Fri
-#   17:00 Berlin = 15:00 UTC  -> stop,   Mon-Fri
-# (In winter/CET the VM would start/stop one hour earlier; fine for this use.)
+# GitHub cron is UTC and best-effort (jobs at :00 get delayed/skipped most).
+# So we use off-peak minutes and start a little early. Berlin summer = UTC+2:
+#   06:45 UTC = 08:45 Berlin -> start (up by ~09:00 even if GitHub is late), Mon-Fri
+#   15:15 UTC = 17:15 Berlin -> stop, Mon-Fri
+# (Winter/CET shifts these one hour earlier in Berlin.)
 on:
   schedule:
-    - cron: '0 7 * * 1-5'
-    - cron: '0 15 * * 1-5'
+    - cron: '45 6 * * 1-5'
+    - cron: '15 15 * * 1-5'
   workflow_dispatch:
     inputs:
       action:
-        description: 'start or stop (manual test)'
+        description: 'start or stop (manual)'
         required: true
         default: 'start'
         type: choice
@@ -31,7 +32,7 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "act=${{ github.event.inputs.action }}" >> "$GITHUB_OUTPUT"
-          elif [ "${{ github.event.schedule }}" = "0 7 * * 1-5" ]; then
+          elif [ "${{ github.event.schedule }}" = "45 6 * * 1-5" ]; then
             echo "act=start" >> "$GITHUB_OUTPUT"
           else
             echo "act=stop" >> "$GITHUB_OUTPUT"
