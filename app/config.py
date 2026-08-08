@@ -1,3 +1,6 @@
+from typing import Optional
+from urllib.parse import urlparse
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -22,6 +25,21 @@ class Settings(BaseSettings):
     @property
     def cookie_secure(self) -> bool:
         return self.app_env == "production"
+
+    @property
+    def cookie_domain(self) -> Optional[str]:
+        """
+        Domain for the auth cookies, so a single login is shared between the
+        frontend origin (e.g. darsyria.me) and the API subdomain
+        (api.darsyria.me). Without it the cookie is host-only on the API, and
+        the frontend's server-side rendering can't see it — which is what
+        makes an owner's draft page 404. Derived from FRONTEND_URL; returns
+        None for localhost or a bare IP so local development keeps working.
+        """
+        host = urlparse(self.frontend_url).hostname or ""
+        if not host or host == "localhost" or host.replace(".", "").isdigit():
+            return None
+        return "." + host
 
     # Magic link
     magic_link_expiration_minutes: int = 15
