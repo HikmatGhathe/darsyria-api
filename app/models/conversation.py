@@ -1,5 +1,7 @@
+import secrets
 import uuid
-from sqlalchemy import Column, String, DateTime, ForeignKey, UniqueConstraint, Index, func
+
+from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer, String, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -48,6 +50,21 @@ class Conversation(Base):
     # Phone numbers are visible to BOTH only when BOTH timestamps are non-null.
     buyer_revealed_at = Column(DateTime(timezone=True), nullable=True)
     seller_revealed_at = Column(DateTime(timezone=True), nullable=True)
+
+    # Opaque email relay address. The token is never returned by the API; it is
+    # used only as the Reply-To local part on messages sent to the seller.
+    reply_token = Column(
+        String(64),
+        nullable=False,
+        unique=True,
+        index=True,
+        default=lambda: secrets.token_hex(32),
+    )
+    reply_token_expires_at = Column(DateTime(timezone=True), nullable=True)
+
+    status = Column(String(20), nullable=False, default="sent", server_default="sent", index=True)
+    first_reply_at = Column(DateTime(timezone=True), nullable=True)
+    message_count = Column(Integer, nullable=False, default=0, server_default="0")
 
     # Bookkeeping. last_message_at is denormalized for cheap sorting in the inbox.
     created_at = Column(

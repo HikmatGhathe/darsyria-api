@@ -105,6 +105,10 @@ class Settings(BaseSettings):
     resend_api_key: str
     email_from: str
     email_from_name: str = "DarSyria"
+    resend_webhook_secret: str = ""
+    inbound_email_domain: str = "mail.darsyria.me"
+    reply_token_ttl_days: int = 365
+    inbound_event_retention_days: int = 14
 
     # Sentry error monitoring. Leave SENTRY_DSN empty to disable entirely
     # (the SDK is never initialized, so this is a complete no-op locally).

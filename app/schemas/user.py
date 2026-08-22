@@ -12,6 +12,10 @@ class UserOut(BaseModel):
     full_name: Optional[str] = None
     phone: Optional[str] = None
     locale: str
+    language_preference: Optional[str] = None
+    nationality: Optional[str] = None
+    country_of_residence: Optional[str] = None
+    has_dual_citizenship: Optional[bool] = None
     is_active: bool
     is_admin: bool
     ban_reason: Optional[str] = None
@@ -37,6 +41,7 @@ class UserAdminListItem(BaseModel):
     email: str
     full_name: Optional[str] = None
     locale: str
+    language_preference: Optional[str] = None
     is_active: bool
     is_admin: bool
     banned_at: Optional[datetime] = None

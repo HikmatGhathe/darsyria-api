@@ -4,11 +4,9 @@ from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
-from sqlalchemy import select, or_, and_, func
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.config import settings
 from app.database import get_db
 from app.dependencies import get_current_user
 from app.limiter import limiter
@@ -25,14 +23,22 @@ from app.schemas.conversation import (
     MessageCreate,
     MessageOut,
 )
-from app.services.email_service import send_message_notification, EmailError
+from app.services.enquiry_service import (
+    MAX_MESSAGES_PER_THREAD_PER_24_HOURS,
+    MAX_NEW_THREADS_PER_24_HOURS,
+    apply_legal_profile,
+    count_recent_buyer_threads,
+    count_recent_thread_messages,
+    has_complete_legal_profile,
+    mark_unanswered_threads,
+    new_reply_token,
+    relay_buyer_message,
+    renew_reply_token,
+    reply_token_expiry,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/conversations", tags=["conversations"])
-
-# Rate limits (per user, per hour)
-MAX_CONVERSATIONS_PER_HOUR = 10
-MAX_MESSAGES_PER_HOUR = 30
 
 # Preview length for inbox
 PREVIEW_LENGTH = 80
@@ -45,33 +51,6 @@ def _truncate(text: str, limit: int = PREVIEW_LENGTH) -> str:
     return text[: limit - 1].rstrip() + "…"
 
 
-def _send_message_notification_email(
-    to_email: str,
-    sender_name: str,
-    property_title: str,
-    message_preview: str,
-    conversation_url: str,
-    locale: str,
-    conversation_id: UUID,
-) -> None:
-    """Runs as a background task — must not raise, non-fatal on failure."""
-    try:
-        send_message_notification(
-            to_email=to_email,
-            sender_name=sender_name,
-            property_title=property_title,
-            message_preview=message_preview,
-            conversation_url=conversation_url,
-            locale=locale,
-        )
-    except EmailError as e:
-        logger.error(
-            "Email notification failed for conversation %s: %s",
-            conversation_id,
-            e,
-        )
-
-
 def _get_user_display_name(user: User) -> Optional[str]:
     """
     Return a display name for a user, if any.
@@ -82,9 +61,7 @@ def _get_user_display_name(user: User) -> Optional[str]:
         return None
     if user.full_name:
         return user.full_name
-    # Fall back to the local part of the email, never the full email
-    if user.email:
-        return user.email.split("@")[0]
+    # Do not derive a display name from the seller's private email address.
     return None
 
 
@@ -101,21 +78,11 @@ def _to_participant(user: User) -> ConversationParticipant:
 def start_conversation(
     payload: ConversationCreate,
     request: Request,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """
-    Start a new conversation by sending an initial message to a property owner.
-
-    Behavior:
-    - Buyer (current_user) sends a message about a property.
-    - Seller is inferred from property.owner_id.
-    - If a conversation already exists between this (property, buyer, seller),
-      the new message is appended to it instead of creating a duplicate.
-    - Buyer cannot start a conversation with themselves about their own property.
-    - Property must be active (not draft).
-    """
-    # Look up the property
+    """Start a buyer enquiry and queue its first seller email."""
     prop = db.get(Property, payload.property_id)
     if not prop:
         raise HTTPException(status_code=404, detail="Property not found")
@@ -132,78 +99,81 @@ def start_conversation(
             detail="You cannot start a conversation about your own property",
         )
 
-    # Rate limit: how many conversations has this user started in the last hour?
-    from datetime import timedelta
-    one_hour_ago = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(hours=1)
-
-    recent_conversation_count = db.execute(
-        select(func.count(Conversation.id))
-        .where(
-            Conversation.buyer_id == current_user.id,
-            Conversation.created_at >= one_hour_ago,
-        )
+    # Serialize creation per buyer so concurrent requests cannot bypass the
+    # persisted 5-new-threads-per-24-hours limit.
+    buyer = db.execute(
+        select(User).where(User.id == current_user.id).with_for_update()
     ).scalar_one()
-
-    if recent_conversation_count >= MAX_CONVERSATIONS_PER_HOUR:
+    apply_legal_profile(buyer, payload.legal_profile)
+    if not has_complete_legal_profile(buyer):
         raise HTTPException(
-            status_code=429,
-            detail="You have started too many conversations in the last hour. Try again later.",
+            status_code=400,
+            detail={
+                "code": "legal_profile_required",
+                "message": "Complete nationality, country of residence, and dual-citizenship status before sending.",
+            },
         )
 
+    now = datetime.now(timezone.utc)
     seller_id = prop.owner_id
-
-    # Try to find an existing conversation for (property, buyer, seller).
-    # The unique constraint on the DB enforces this, but we look up first
-    # to avoid raising IntegrityError on the common "already exists" path.
     existing = db.execute(
-        select(Conversation).where(
+        select(Conversation)
+        .where(
             Conversation.property_id == prop.id,
-            Conversation.buyer_id == current_user.id,
+            Conversation.buyer_id == buyer.id,
             Conversation.seller_id == seller_id,
         )
+        .with_for_update()
     ).scalar_one_or_none()
 
     if existing is not None:
         conversation = existing
+        if (
+            count_recent_thread_messages(db, conversation.id, now)
+            >= MAX_MESSAGES_PER_THREAD_PER_24_HOURS
+        ):
+            raise HTTPException(
+                status_code=429,
+                detail="This enquiry has reached its 20-message limit for the last 24 hours.",
+            )
     else:
+        if count_recent_buyer_threads(db, buyer.id, now) >= MAX_NEW_THREADS_PER_24_HOURS:
+            raise HTTPException(
+                status_code=429,
+                detail="You can start at most 5 new enquiries in 24 hours.",
+            )
         conversation = Conversation(
             property_id=prop.id,
-            buyer_id=current_user.id,
+            buyer_id=buyer.id,
             seller_id=seller_id,
+            reply_token=new_reply_token(),
+            reply_token_expires_at=reply_token_expiry(now),
+            status="sent",
         )
         db.add(conversation)
-        try:
-            db.flush()  # assigns conversation.id without committing
-        except IntegrityError:
-            # Race condition: another request inserted the same (property, buyer, seller).
-            # Roll back and fetch the existing one.
-            db.rollback()
-            conversation = db.execute(
-                select(Conversation).where(
-                    Conversation.property_id == prop.id,
-                    Conversation.buyer_id == current_user.id,
-                    Conversation.seller_id == seller_id,
-                )
-            ).scalar_one()
+        db.flush()
 
-    # Insert the initial message
     msg = Message(
         conversation_id=conversation.id,
-        sender_id=current_user.id,
+        sender_id=buyer.id,
+        direction="buyer_to_seller",
         body=payload.body.strip(),
+        delivery_status="pending",
     )
     db.add(msg)
-
-    # Touch the conversation's last_message_at
-    conversation.last_message_at = func.now()
+    conversation.last_message_at = now
+    conversation.message_count = (conversation.message_count or 0) + 1
+    renew_reply_token(conversation, now)
 
     db.commit()
     db.refresh(conversation)
+    db.refresh(msg)
+    background_tasks.add_task(relay_buyer_message, msg.id)
 
     logger.info(
         "Conversation %s: %s sent initial message to %s about property %s",
         conversation.id,
-        current_user.id,
+        buyer.id,
         seller_id,
         prop.id,
     )
@@ -217,27 +187,19 @@ def list_conversations(
     current_user: User = Depends(get_current_user),
 ):
     """
-    List all conversations the current user is part of (as buyer or seller).
-    Sorted by most recent activity first.
+    List the current buyer's enquiries, most recently active first.
     """
-    # All conversations where the user is either buyer or seller
+    mark_unanswered_threads(db)
     stmt = (
         select(Conversation)
-        .where(
-            or_(
-                Conversation.buyer_id == current_user.id,
-                Conversation.seller_id == current_user.id,
-            )
-        )
+        .where(Conversation.buyer_id == current_user.id)
         .order_by(Conversation.last_message_at.desc())
     )
     conversations = db.execute(stmt).scalars().all()
 
     items: list[ConversationListItem] = []
     for conv in conversations:
-        # The other party
-        is_buyer = conv.buyer_id == current_user.id
-        other_user_id = conv.seller_id if is_buyer else conv.buyer_id
+        other_user_id = conv.seller_id
         other_user = db.get(User, other_user_id)
 
         # Property info
@@ -269,7 +231,7 @@ def list_conversations(
             select(func.count(Message.id))
             .where(
                 Message.conversation_id == conv.id,
-                Message.sender_id != current_user.id,
+                Message.direction == "seller_to_buyer",
                 Message.read_at.is_(None),
             )
         ).scalar_one()
@@ -284,6 +246,9 @@ def list_conversations(
                 last_message_preview=_truncate(latest_msg.body) if latest_msg else None,
                 last_message_at=conv.last_message_at,
                 has_unread=unread_count > 0,
+                status=conv.status,
+                message_count=conv.message_count,
+                first_reply_at=conv.first_reply_at,
                 created_at=conv.created_at,
             )
         )
@@ -301,9 +266,8 @@ def _build_conversation_out(
     Build a ConversationOut, including all messages, with phone numbers
     populated only if both parties have revealed.
     """
-    # Authorize: viewing_user must be either buyer or seller
-    if viewing_user.id not in (conversation.buyer_id, conversation.seller_id):
-        raise HTTPException(status_code=403, detail="Not a participant in this conversation")
+    if viewing_user.id != conversation.buyer_id:
+        raise HTTPException(status_code=403, detail="Only the buyer can view this enquiry")
 
     # Load property title
     prop = db.get(Property, conversation.property_id)
@@ -337,6 +301,9 @@ def _build_conversation_out(
         property_title=property_title,
         buyer_id=conversation.buyer_id,
         seller_id=conversation.seller_id,
+        status=conversation.status,
+        message_count=conversation.message_count,
+        first_reply_at=conversation.first_reply_at,
         buyer_revealed_at=conversation.buyer_revealed_at,
         seller_revealed_at=conversation.seller_revealed_at,
         both_revealed=both_revealed,
@@ -348,15 +315,14 @@ def _build_conversation_out(
     )
 
 
-@router.get("/{conversation_id}", response_model=ConversationOut)
+@router.get("/{conversation_id:uuid}", response_model=ConversationOut)
 def get_conversation(
     conversation_id: UUID,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """
-    Get a conversation thread with all its messages.
-    Only participants (buyer or seller) can view it.
+    Get a buyer's enquiry thread with all its messages.
     """
     conv = db.get(Conversation, conversation_id)
     if not conv:
@@ -384,46 +350,51 @@ def send_message(
     current_user: User = Depends(get_current_user),
 ):
     """
-    Send a message in an existing conversation.
-    Only participants can send. Rate-limited per user per hour.
+    Send another buyer message and relay it under the same reply token.
     """
-    conv = db.get(Conversation, conversation_id)
+    conv = db.execute(
+        select(Conversation)
+        .where(Conversation.id == conversation_id)
+        .with_for_update()
+    ).scalar_one_or_none()
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
-    if current_user.id not in (conv.buyer_id, conv.seller_id):
-        raise HTTPException(status_code=403, detail="Not a participant in this conversation")
+    if current_user.id != conv.buyer_id:
+        raise HTTPException(status_code=403, detail="Only the buyer can send from the web thread")
 
-    # Rate limit: how many messages has this user sent across all conversations in the last hour?
-    from datetime import timedelta
-    one_hour_ago = datetime.now(timezone.utc) - timedelta(hours=1)
-
-    recent_message_count = db.execute(
-        select(func.count(Message.id))
-        .where(
-            Message.sender_id == current_user.id,
-            Message.created_at >= one_hour_ago,
+    if not has_complete_legal_profile(current_user):
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "legal_profile_required"},
         )
-    ).scalar_one()
 
-    if recent_message_count >= MAX_MESSAGES_PER_HOUR:
+    now = datetime.now(timezone.utc)
+    if (
+        count_recent_thread_messages(db, conv.id, now)
+        >= MAX_MESSAGES_PER_THREAD_PER_24_HOURS
+    ):
         raise HTTPException(
             status_code=429,
-            detail="You have sent too many messages in the last hour. Try again later.",
+            detail="This enquiry has reached its 20-message limit for the last 24 hours.",
         )
 
     msg = Message(
         conversation_id=conv.id,
         sender_id=current_user.id,
+        direction="buyer_to_seller",
         body=payload.body.strip(),
+        delivery_status="pending",
     )
     db.add(msg)
 
-    # Update last_message_at on the conversation
-    conv.last_message_at = func.now()
+    conv.last_message_at = now
+    conv.message_count = (conv.message_count or 0) + 1
+    renew_reply_token(conv, now)
 
     db.commit()
     db.refresh(msg)
+    background_tasks.add_task(relay_buyer_message, msg.id)
 
     logger.info(
         "Conversation %s: message %s sent by %s",
@@ -431,54 +402,6 @@ def send_message(
         msg.id,
         current_user.id,
     )
-
-    # Email notification to the OTHER party, with debounce.
-    # Only send if we haven't notified in the last 60 seconds for this conversation.
-    NOTIFICATION_DEBOUNCE_SECONDS = 60
-
-    should_notify = True
-    if conv.last_notification_at is not None:
-        last_notif = conv.last_notification_at
-        if last_notif.tzinfo is None:
-            last_notif = last_notif.replace(tzinfo=timezone.utc)
-        seconds_since_last = (datetime.now(timezone.utc) - last_notif).total_seconds()
-        if seconds_since_last < NOTIFICATION_DEBOUNCE_SECONDS:
-            should_notify = False
-
-    if should_notify:
-        recipient_id = conv.seller_id if current_user.id == conv.buyer_id else conv.buyer_id
-        recipient = db.get(User, recipient_id)
-
-        prop = db.get(Property, conv.property_id)
-        property_title = prop.title if prop else "your listing"
-
-        sender_name = _get_user_display_name(current_user) or "Someone"
-
-        recipient_locale = recipient.locale if recipient.locale else "en"
-        if recipient_locale not in ("en", "de", "ar"):
-            recipient_locale = "en"
-        conversation_url = f"{settings.frontend_url}/{recipient_locale}/inbox/{conv.id}"
-
-        message_preview = msg.body if len(msg.body) <= 200 else msg.body[:199].rstrip() + "…"
-
-        if recipient and recipient.email:
-            # Stamp the debounce timestamp now, synchronously — it tracks
-            # notification *attempts* (to rate-limit how often we email),
-            # not delivery confirmation, so it doesn't need to wait on the
-            # background send below.
-            conv.last_notification_at = datetime.now(timezone.utc)
-            db.commit()
-
-            background_tasks.add_task(
-                _send_message_notification_email,
-                to_email=recipient.email,
-                sender_name=sender_name,
-                property_title=property_title,
-                message_preview=message_preview,
-                conversation_url=conversation_url,
-                locale=recipient_locale,
-                conversation_id=conv.id,
-            )
 
     return msg
 
@@ -505,8 +428,8 @@ def mark_conversation_read(
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
-    if current_user.id not in (conv.buyer_id, conv.seller_id):
-        raise HTTPException(status_code=403, detail="Not a participant in this conversation")
+    if current_user.id != conv.buyer_id:
+        raise HTTPException(status_code=403, detail="Only the buyer can read this enquiry")
 
     now = datetime.now(timezone.utc)
 
@@ -515,7 +438,7 @@ def mark_conversation_read(
         Message.__table__.update()
         .where(
             Message.conversation_id == conv.id,
-            Message.sender_id != current_user.id,
+            Message.direction == "seller_to_buyer",
             Message.read_at.is_(None),
         )
         .values(read_at=now)

@@ -1,5 +1,6 @@
 import logging
 from datetime import datetime, timezone
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
@@ -39,6 +40,7 @@ from app.services.google_oauth_service import (
     exchange_code_for_userinfo,
     find_or_create_google_user,
 )
+from app.services.redirect_service import sanitize_next_path
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -90,9 +92,12 @@ def request_magic_link(
         user_agent=user_agent,
     )
 
+    query = {"token": raw_token}
+    next_path = sanitize_next_path(payload.next_path)
+    if next_path:
+        query["next"] = next_path
     magic_link = (
-        f"{settings.frontend_url}/{payload.locale}/auth/verify"
-        f"?token={raw_token}"
+        f"{settings.frontend_url}/{payload.locale}/auth/verify?{urlencode(query)}"
     )
 
     # Send in the background so a slow/down email provider doesn't block
@@ -125,6 +130,11 @@ def verify_magic_link(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Account is disabled",
         )
+
+    if user.language_preference is None:
+        user.language_preference = payload.locale
+        db.commit()
+        db.refresh(user)
 
     access_token = create_access_token(user)
     refresh_token = create_refresh_token(db, user)
@@ -187,7 +197,8 @@ def update_me(
 
     # Defensive: ignore any keys that aren't in the allow-list
     allowed = {
-        "full_name", "phone", "phone_public", "locale",
+        "full_name", "phone", "phone_public", "locale", "language_preference",
+        "nationality", "country_of_residence", "has_dual_citizenship",
         "account_type", "company_name", "company_about",
         "company_website", "company_address",
     }
@@ -261,6 +272,10 @@ def export_my_data(
             "full_name": current_user.full_name,
             "phone": current_user.phone,
             "locale": current_user.locale,
+            "language_preference": current_user.language_preference,
+            "nationality": current_user.nationality,
+            "country_of_residence": current_user.country_of_residence,
+            "has_dual_citizenship": current_user.has_dual_citizenship,
             "created_at": current_user.created_at.isoformat(),
             "last_login_at": current_user.last_login_at.isoformat() if current_user.last_login_at else None,
         },
@@ -334,7 +349,11 @@ def logout(
 
 
 @router.get("/google/login")
-def google_login(locale: str = "en", db: Session = Depends(get_db)):
+def google_login(
+    locale: str = "en",
+    next_path: str | None = None,
+    db: Session = Depends(get_db),
+):
     """
     Start the Google OAuth flow.
     Returns the URL the frontend should redirect the user to.
@@ -342,7 +361,9 @@ def google_login(locale: str = "en", db: Session = Depends(get_db)):
     if locale not in ("ar", "de", "en"):
         locale = "en"
 
-    state = create_oauth_state(db, locale=locale)
+    state = create_oauth_state(
+        db, locale=locale, next_path=sanitize_next_path(next_path)
+    )
     url = build_authorization_url(state)
     return {"authorization_url": url}
 
@@ -363,12 +384,14 @@ def google_callback(
             status_code=302,
         )
 
-    locale = consume_oauth_state(db, state)
-    if not locale:
+    state_data = consume_oauth_state(db, state)
+    if not state_data:
         return RedirectResponse(
             url=f"{settings.frontend_url}/en/auth/verify?error=invalid_state",
             status_code=302,
         )
+
+    locale, next_path = state_data
 
     userinfo = exchange_code_for_userinfo(code)
     if not userinfo or "sub" not in userinfo or "email" not in userinfo:
@@ -377,7 +400,7 @@ def google_callback(
             status_code=302,
         )
 
-    user = find_or_create_google_user(db, userinfo)
+    user = find_or_create_google_user(db, userinfo, locale=locale)
     if not user.is_active:
         return RedirectResponse(
             url=f"{settings.frontend_url}/{locale}/auth/verify?error=account_disabled",
@@ -389,8 +412,11 @@ def google_callback(
 
     # Set cookies directly on the redirect response — no token in the URL,
     # so it never appears in browser history or referrer headers.
+    query = {"oauth": "success"}
+    if next_path:
+        query["next"] = next_path
     redirect = RedirectResponse(
-        url=f"{settings.frontend_url}/{locale}/auth/verify?oauth=success",
+        url=f"{settings.frontend_url}/{locale}/auth/verify?{urlencode(query)}",
         status_code=302,
     )
     set_auth_cookies(redirect, access_token, refresh_token)

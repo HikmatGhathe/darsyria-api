@@ -15,7 +15,10 @@ from app.database import SessionLocal, get_db
 from app.limiter import limiter
 from app.observability import init_sentry
 from app.routers import auth as auth_router, chat as chat_router, properties as properties_router, conversations as conversations_router, admin_properties as admin_properties_router, admin_users as admin_users_router, sellers as sellers_router, sitemap as sitemap_router, favorites as favorites_router, saved_searches as saved_searches_router, reports as reports_router, admin_reports as admin_reports_router, verification as verification_router, billing as billing_router, admin_billing as admin_billing_router
+from app.routers import enquiry_analytics as enquiry_analytics_router
+from app.routers import resend_webhooks as resend_webhooks_router
 from app.services.digest_service import run_daily_updates
+from app.services.enquiry_service import mark_unanswered_threads, purge_expired_inbound_events
 
 logger = logging.getLogger(__name__)
 
@@ -45,10 +48,22 @@ async def _digest_loop():
                 run_daily_updates(db)
         except Exception:
             logger.exception("Daily update run failed")
+        try:
+            with SessionLocal() as db:
+                mark_unanswered_threads(db)
+                purge_expired_inbound_events(db)
+        except Exception:
+            logger.exception("Enquiry maintenance run failed")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    try:
+        with SessionLocal() as db:
+            mark_unanswered_threads(db)
+            purge_expired_inbound_events(db)
+    except Exception:
+        logger.exception("Startup enquiry maintenance failed")
     task = asyncio.create_task(_digest_loop())
     logger.info("Digest scheduler started (next run in %.0fs)", _seconds_until_next_digest_run())
     yield
@@ -81,6 +96,7 @@ app.include_router(auth_router.router)
 app.include_router(chat_router.router)
 app.include_router(properties_router.router)
 app.include_router(conversations_router.router)
+app.include_router(enquiry_analytics_router.router)
 app.include_router(admin_properties_router.router)
 app.include_router(admin_users_router.router)
 app.include_router(sellers_router.router)
@@ -88,6 +104,7 @@ app.include_router(sitemap_router.router)
 app.include_router(favorites_router.router)
 app.include_router(saved_searches_router.router)
 app.include_router(reports_router.router)
+app.include_router(resend_webhooks_router.router)
 app.include_router(admin_reports_router.router)
 app.include_router(verification_router.router)
 app.include_router(billing_router.router)

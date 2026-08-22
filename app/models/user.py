@@ -19,6 +19,13 @@ class User(Base):
     # show their phone regardless of this flag.
     phone_public = Column(Boolean, nullable=False, default=False, server_default="false")
     locale = Column(String(5), nullable=False, default="en")
+    language_preference = Column(String(5), nullable=True)
+
+    # Buyer legal profile. The boolean stays nullable so "not answered" is
+    # distinguishable from an explicit "no".
+    nationality = Column(String(100), nullable=True)
+    country_of_residence = Column(String(100), nullable=True)
+    has_dual_citizenship = Column(Boolean, nullable=True)
 
     # Profile / role
     is_active = Column(Boolean, nullable=False, default=True)

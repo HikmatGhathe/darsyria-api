@@ -10,7 +10,7 @@ from app.database import Base
 
 # Import all models here so Alembic can detect them.
 # Each model file we create needs to be imported here.
-from app.models import article, chat_message, favorite, follow, magic_link_token, oauth_state, refresh_token, report, saved_search, user, property, property_image, conversation, message, verification_document, app_setting, invoice  # noqa: F401
+from app.models import article, chat_message, favorite, follow, inbound_email_event, magic_link_token, oauth_state, refresh_token, report, saved_search, user, property, property_image, conversation, message, verification_document, app_setting, invoice  # noqa: F401
 
 # Alembic config object
 config = context.config

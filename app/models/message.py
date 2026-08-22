@@ -32,6 +32,13 @@ class Message(Base):
 
     body = Column(Text, nullable=False)
 
+    direction = Column(String(20), nullable=False)
+    delivery_status = Column(
+        String(20), nullable=False, default="pending", server_default="pending"
+    )
+    outbound_email_id = Column(String(100), nullable=True, unique=True, index=True)
+    inbound_message_id = Column(String(100), nullable=True, unique=True, index=True)
+
     # When the recipient read this message. Null if unread.
     read_at = Column(DateTime(timezone=True), nullable=True)
 

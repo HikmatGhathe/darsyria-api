@@ -13,6 +13,7 @@ class OAuthState(Base):
     state = Column(String(64), nullable=False, unique=True, index=True)
     provider = Column(String(50), nullable=False)  # "google"
     locale = Column(String(5), nullable=False, default="en")
+    next_path = Column(String(500), nullable=True)
     expires_at = Column(DateTime(timezone=True), nullable=False)
     created_at = Column(
         DateTime(timezone=True),

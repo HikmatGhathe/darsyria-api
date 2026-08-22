@@ -65,6 +65,10 @@ Two `.env` files. Start from the committed `.env.example` in each repo.
 | `R2_*` (6 vars) | your Cloudflare R2 values | Image upload + serving. |
 | `R2_PUBLIC_URL` | your public bucket URL | Also see the Next.js note below. |
 | `RESEND_API_KEY`, `EMAIL_FROM`, `EMAIL_FROM_NAME` | your values | Transactional email. `EMAIL_FROM` must be on the verified Resend domain (§5). |
+| `RESEND_WEBHOOK_SECRET` | Resend webhook signing secret | Required to authenticate delivery and inbound-email events. |
+| `INBOUND_EMAIL_DOMAIN` | `mail.darsyria.me` | Dedicated receiving subdomain used for private per-thread reply addresses. |
+| `REPLY_TOKEN_TTL_DAYS` | `365` | Lifetime of a thread's unguessable reply address. |
+| `INBOUND_EVENT_RETENTION_DAYS` | `14` | Short retention window for inbound parsing audit records. |
 | `SENTRY_DSN` | (optional) your API DSN | Empty = monitoring off (no-op). |
 
 ### Frontend — build args (set on the host before `docker compose build`)
@@ -103,6 +107,24 @@ gives you:
 - [ ] `EMAIL_FROM` uses this domain (e.g. `no-reply@darsyria.com`).
 - [ ] **Test:** send yourself a magic link in production and confirm it lands
       in the inbox (not spam) and the link works.
+
+### Buyer-seller email relay
+
+Receiving is configured separately from sending. Keep it on a subdomain so it
+cannot interfere with normal mail on the apex domain.
+
+- [ ] Add `mail.<domain>` to Resend with sending disabled and receiving enabled.
+- [ ] At the DNS provider, add Resend's `Receiving` MX record on host `mail`.
+      The MX target and priority must exactly match the domain record shown by
+      Resend; it must be the lowest-priority-number MX for that subdomain.
+- [ ] Create `https://api.<domain>/webhooks/resend` in Resend and subscribe to
+      `email.received`, `email.sent`, `email.delivered`,
+      `email.delivery_delayed`, `email.failed`, and `email.bounced`.
+- [ ] Store the returned signing secret as `RESEND_WEBHOOK_SECRET`, then restart
+      the API container.
+- [ ] Confirm `mail.<domain>` is verified in Resend before exposing the buyer
+      composer. Send a real enquiry and reply from the seller mailbox as the
+      final end-to-end check.
 
 ---
 

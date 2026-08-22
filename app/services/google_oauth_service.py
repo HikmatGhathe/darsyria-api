@@ -17,13 +17,16 @@ GOOGLE_USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
 STATE_LIFETIME_MINUTES = 10
 
 
-def create_oauth_state(db: Session, locale: str = "en") -> str:
+def create_oauth_state(
+    db: Session, locale: str = "en", next_path: Optional[str] = None
+) -> str:
     """Create a short-lived state value for CSRF protection."""
     state = secrets.token_urlsafe(32)
     db_state = OAuthState(
         state=state,
         provider="google",
         locale=locale,
+        next_path=next_path,
         expires_at=datetime.now(timezone.utc)
         + timedelta(minutes=STATE_LIFETIME_MINUTES),
     )
@@ -32,7 +35,9 @@ def create_oauth_state(db: Session, locale: str = "en") -> str:
     return state
 
 
-def consume_oauth_state(db: Session, state: str) -> Optional[str]:
+def consume_oauth_state(
+    db: Session, state: str
+) -> Optional[tuple[str, Optional[str]]]:
     """
     Consume a valid Google OAuth state and return its locale.
     Also opportunistically removes expired states.
@@ -58,9 +63,10 @@ def consume_oauth_state(db: Session, state: str) -> Optional[str]:
         return None
 
     locale = db_state.locale
+    next_path = db_state.next_path
     db.delete(db_state)
     db.commit()
-    return locale
+    return locale, next_path
 
 
 def build_authorization_url(state: str) -> str:
@@ -110,7 +116,9 @@ def exchange_code_for_userinfo(code: str) -> Optional[dict]:
         return userinfo_response.json()
 
 
-def find_or_create_google_user(db: Session, userinfo: dict) -> User:
+def find_or_create_google_user(
+    db: Session, userinfo: dict, locale: str = "en"
+) -> User:
     """
     Match a Google user to our user table.
     Match priority:
@@ -141,6 +149,8 @@ def find_or_create_google_user(db: Session, userinfo: dict) -> User:
         user = User(
             email=email,
             full_name=name,
+            locale=locale,
+            language_preference=locale,
             oauth_provider="google",
             oauth_subject=google_sub,
         )
@@ -148,6 +158,9 @@ def find_or_create_google_user(db: Session, userinfo: dict) -> User:
 
     if not user.full_name and name:
         user.full_name = name
+
+    if user.language_preference is None:
+        user.language_preference = locale
 
     user.last_login_at = datetime.now(timezone.utc)
     db.commit()
