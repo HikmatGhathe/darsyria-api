@@ -1,49 +1,86 @@
-name: VM start/stop schedule
+name: VM business-hours schedule
 
-# GitHub cron is UTC and best-effort (jobs at :00 get delayed/skipped most).
-# So we use off-peak minutes and start a little early. Berlin summer = UTC+2:
-#   06:45 UTC = 08:45 Berlin -> start (up by ~09:00 even if GitHub is late), Mon-Fri
-#   15:15 UTC = 17:15 Berlin -> stop, Mon-Fri
-# (Winter/CET shifts these one hour earlier in Berlin.)
+# The Europe/Berlin timezone keeps the schedule correct across CET and CEST.
+# Start shortly before 09:00 so the platform is ready for business hours,
+# then deallocate just after 15:00. Weekends have a stop-only safety check.
 on:
   schedule:
-    - cron: '45 6 * * 1-5'
-    - cron: '15 15 * * 1-5'
+    - cron: '55 8 * * 1-5'
+      timezone: Europe/Berlin
+    - cron: '5 15 * * 1-5'
+      timezone: Europe/Berlin
+    - cron: '15 8 * * 6,0'
+      timezone: Europe/Berlin
   workflow_dispatch:
     inputs:
       action:
-        description: 'start or stop (manual)'
+        description: 'Power action'
         required: true
-        default: 'start'
+        default: 'stop'
         type: choice
         options: [start, stop]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: darsyria-vm-power
+  cancel-in-progress: false
+
+env:
+  AZURE_RESOURCE_GROUP: DARSYRIA-RG
+  AZURE_VM_NAME: darsyria-vm
+
 jobs:
-  schedule:
+  power:
     runs-on: ubuntu-latest
     steps:
+      - name: Decide the required power state
+        id: decide
+        env:
+          MANUAL_ACTION: ${{ inputs.action }}
+          TRIGGER_SCHEDULE: ${{ github.event.schedule }}
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            action="$MANUAL_ACTION"
+          elif [[ "$TRIGGER_SCHEDULE" == "55 8 * * 1-5" ]]; then
+            action=start
+          else
+            action=stop
+          fi
+
+          echo "Berlin time: $(TZ=Europe/Berlin date --iso-8601=seconds)"
+          echo "action=$action" | tee -a "$GITHUB_OUTPUT"
+
       - name: Azure login
+        if: steps.decide.outputs.action != 'none'
         uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Decide start or stop
-        id: decide
+      - name: Reconcile VM power state
+        if: steps.decide.outputs.action != 'none'
+        shell: bash
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "act=${{ github.event.inputs.action }}" >> "$GITHUB_OUTPUT"
-          elif [ "${{ github.event.schedule }}" = "45 6 * * 1-5" ]; then
-            echo "act=start" >> "$GITHUB_OUTPUT"
-          else
-            echo "act=stop" >> "$GITHUB_OUTPUT"
-          fi
+          state=$(az vm get-instance-view \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --name "$AZURE_VM_NAME" \
+            --query "instanceView.statuses[?starts_with(code, 'PowerState/')].code | [0]" \
+            --output tsv)
 
-      - name: Start or stop the VM
-        run: |
-          if [ "${{ steps.decide.outputs.act }}" = "start" ]; then
-            echo "Starting VM..."
-            az vm start -g darsyria-rg -n darsyria-vm
+          if [[ "${{ steps.decide.outputs.action }}" == "start" ]]; then
+            if [[ "$state" == "PowerState/running" ]]; then
+              echo "VM is already running."
+            else
+              az vm start \
+                --resource-group "$AZURE_RESOURCE_GROUP" \
+                --name "$AZURE_VM_NAME"
+            fi
+          elif [[ "$state" == "PowerState/deallocated" ]]; then
+            echo "VM is already deallocated."
           else
-            echo "Deallocating VM..."
-            az vm deallocate -g darsyria-rg -n darsyria-vm
+            az vm deallocate \
+              --resource-group "$AZURE_RESOURCE_GROUP" \
+              --name "$AZURE_VM_NAME"
           fi
