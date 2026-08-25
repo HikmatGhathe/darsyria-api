@@ -2,13 +2,13 @@ name: VM business-hours schedule
 
 # The Europe/Berlin timezone keeps the schedule correct across CET and CEST.
 # Queue startup early enough to absorb GitHub scheduling delays. Queue shutdown
-# before 15:00, but wait until 15:00 if the runner arrives early. Weekends have
+# before 18:00, but wait until 18:00 if the runner arrives early. Weekends have
 # a stop-only safety check.
 on:
   schedule:
-    - cron: '10 8 * * 1-5'
+    - cron: '45 7 * * 1-5'
       timezone: Europe/Berlin
-    - cron: '30 14 * * 1-5'
+    - cron: '30 17 * * 1-5'
       timezone: Europe/Berlin
     - cron: '15 8 * * 6,0'
       timezone: Europe/Berlin
@@ -45,7 +45,7 @@ jobs:
         run: |
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             action="$MANUAL_ACTION"
-          elif [[ "$TRIGGER_SCHEDULE" == "10 8 * * 1-5" ]]; then
+          elif [[ "$TRIGGER_SCHEDULE" == "45 7 * * 1-5" ]]; then
             action=start
           else
             action=stop
@@ -67,14 +67,14 @@ jobs:
         shell: bash
         run: |
           if [[ "${{ steps.decide.outputs.action }}" == "stop" ]] \
-            && [[ "$TRIGGER_SCHEDULE" == "30 14 * * 1-5" ]]; then
+            && [[ "$TRIGGER_SCHEDULE" == "30 17 * * 1-5" ]]; then
             export TZ=Europe/Berlin
-            target=$(date -d "$(date +%F) 15:00:00" +%s)
+            target=$(date -d "$(date +%F) 18:00:00" +%s)
             now=$(date +%s)
             wait_seconds=$((target - now))
 
             if (( wait_seconds > 0 )); then
-              echo "Waiting $wait_seconds seconds before the 15:00 shutdown."
+              echo "Waiting $wait_seconds seconds before the 18:00 shutdown."
               sleep "$wait_seconds"
             fi
           fi
