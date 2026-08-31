@@ -1,25 +1,19 @@
 name: VM business-hours schedule
 
-# The Europe/Berlin timezone keeps the schedule correct across CET and CEST.
-# Queue startup early enough to absorb GitHub scheduling delays. Queue shutdown
-# before 18:00, but wait until 18:00 if the runner arrives early. Weekends have
-# a stop-only safety check.
+# GitHub scheduled workflows are best-effort and can be delayed or skipped.
+# Run frequent reconciliation checks and decide from the current Berlin time
+# at execution, so delayed jobs cannot start the VM outside business hours.
 on:
   schedule:
-    - cron: '45 7 * * 1-5'
-      timezone: Europe/Berlin
-    - cron: '30 17 * * 1-5'
-      timezone: Europe/Berlin
-    - cron: '15 8 * * 6,0'
-      timezone: Europe/Berlin
+    - cron: '7,22,37,52 * * * *'
   workflow_dispatch:
     inputs:
       action:
         description: 'Power action'
         required: true
-        default: 'stop'
+        default: 'reconcile'
         type: choice
-        options: [start, stop]
+        options: [reconcile, start, stop]
 
 permissions:
   contents: read
@@ -40,15 +34,22 @@ jobs:
         id: decide
         env:
           MANUAL_ACTION: ${{ inputs.action }}
-          TRIGGER_SCHEDULE: ${{ github.event.schedule }}
         shell: bash
         run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "$MANUAL_ACTION" != "reconcile" ]]; then
             action="$MANUAL_ACTION"
-          elif [[ "$TRIGGER_SCHEDULE" == "45 7 * * 1-5" ]]; then
-            action=start
           else
-            action=stop
+            berlin_day=$(TZ=Europe/Berlin date +%u)
+            berlin_hour=$(TZ=Europe/Berlin date +%H)
+            berlin_minute=$(TZ=Europe/Berlin date +%M)
+            berlin_minutes=$((10#$berlin_hour * 60 + 10#$berlin_minute))
+
+            if (( berlin_day >= 1 && berlin_day <= 5 \
+              && berlin_minutes >= 480 && berlin_minutes < 1080 )); then
+              action=start
+            else
+              action=stop
+            fi
           fi
 
           echo "Berlin time: $(TZ=Europe/Berlin date --iso-8601=seconds)"
@@ -62,23 +63,8 @@ jobs:
 
       - name: Reconcile VM power state
         if: steps.decide.outputs.action != 'none'
-        env:
-          TRIGGER_SCHEDULE: ${{ github.event.schedule }}
         shell: bash
         run: |
-          if [[ "${{ steps.decide.outputs.action }}" == "stop" ]] \
-            && [[ "$TRIGGER_SCHEDULE" == "30 17 * * 1-5" ]]; then
-            export TZ=Europe/Berlin
-            target=$(date -d "$(date +%F) 18:00:00" +%s)
-            now=$(date +%s)
-            wait_seconds=$((target - now))
-
-            if (( wait_seconds > 0 )); then
-              echo "Waiting $wait_seconds seconds before the 18:00 shutdown."
-              sleep "$wait_seconds"
-            fi
-          fi
-
           state=$(az vm get-instance-view \
             --resource-group "$AZURE_RESOURCE_GROUP" \
             --name "$AZURE_VM_NAME" \
