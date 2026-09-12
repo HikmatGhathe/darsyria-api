@@ -54,6 +54,7 @@ app/
   services/          # r2_storage, email, embeddings, payments, settings, digest
 alembic/             # migrations
 docs/launch-runbook.md   # production go-live checklist
+infra/terraform/      # Azure VM and networking as infrastructure as code
 ```
 
 ## Running locally (Docker Compose)
@@ -66,4 +67,5 @@ curl http://localhost:8000/health
 ```
 
 Production deploy (single VM, one command, automatic HTTPS via Caddy) is
-documented in **[docs/launch-runbook.md](docs/launch-runbook.md)**.
+documented in **[docs/launch-runbook.md](docs/launch-runbook.md)**. The existing
+Azure infrastructure is managed in **[infra/terraform](infra/terraform)**.
