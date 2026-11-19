@@ -4,11 +4,13 @@ on:
   pull_request:
     paths:
       - 'infra/terraform/**'
+      - 'infra/terraform-gcp/**'
       - '.github/workflows/terraform.yml'
   push:
     branches: [main]
     paths:
       - 'infra/terraform/**'
+      - 'infra/terraform-gcp/**'
       - '.github/workflows/terraform.yml'
 
 permissions:
@@ -17,9 +19,13 @@ permissions:
 jobs:
   validate:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        directory: [infra/terraform, infra/terraform-gcp]
     defaults:
       run:
-        working-directory: infra/terraform
+        working-directory: ${{ matrix.directory }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -33,7 +39,11 @@ jobs:
         run: terraform fmt -check -recursive
 
       - name: Initialize without backend
-        run: terraform init -backend=false
+        run: terraform init -backend=false -input=false -lockfile=readonly
 
       - name: Validate configuration
         run: terraform validate
+
+      - name: Check VM startup script syntax
+        if: matrix.directory == 'infra/terraform-gcp'
+        run: bash -n startup.sh
