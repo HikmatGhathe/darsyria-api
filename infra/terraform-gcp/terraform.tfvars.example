@@ -1,0 +1,8 @@
+project_id              = "YOUR_PROJECT_ID"
+admin_email             = "you@example.com"
+region                  = "europe-west3"
+zone                    = "europe-west3-a"
+vm_name                 = "darsyria-gcp"
+machine_type            = "e2-standard-2"
+boot_disk_size_gb       = 50
+snapshot_retention_days = 7
